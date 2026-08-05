@@ -22,6 +22,19 @@ LeIsaac 官方兼容矩阵将 Isaac Sim 4.5 与 IsaacLab v2.1.1、Python 3.10、
 PyTorch 2.5.1 配套。本项目按该组合锁定，不使用现有被修改的 IsaacLab/LeIsaac
 工作树。
 
+## Python-only 运行入口
+
+所有项目入口先调用 `scripts/isaac_runtime.py`。该模块使用纯 Python 完成以下工作：
+
+- 从系统 `python3` 自动重新执行到 `lwh_isaac` Python 3.10。
+- 配置 Isaac Sim 的应用、扩展、Python 和动态库路径。
+- 校验 SO101 与桌面场景 USD 已完整下载。
+- 从继承环境中移除 ROS 和 `soarm_ros` 路径，防止仿真入口加载真实机器人环境。
+- 监督验证子进程，保留可靠的成功/失败退出码。
+
+项目不再包含 shell 运行入口，后续 teleop、record、replay 和 policy client/server
+也应直接使用这一 Python bootstrap。
+
 ### LeIsaac 0.4.0 终止管理器兼容处理
 
 LeIsaac 提交 `d1859500b13c1cbc48762792a67908d1c9e15d87` 引入的临时补丁按二维

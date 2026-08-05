@@ -9,6 +9,11 @@ import os
 import traceback
 from pathlib import Path
 
+from isaac_runtime import ensure_isaac_runtime
+
+
+ensure_isaac_runtime(supervise_validation=True)
+
 from isaaclab.app import AppLauncher
 
 
@@ -59,7 +64,7 @@ def progress(message: str) -> None:
 
 
 def write_process_status(status: str) -> None:
-    """在 Kit 关闭进程前向 shell wrapper 写入最终状态。"""
+    """在 Kit 关闭进程前向 Python 监督进程写入最终状态。"""
     status_path = os.environ.get("LWH_VALIDATION_STATUS_FILE")
     if status_path:
         Path(status_path).write_text(status + "\n", encoding="utf-8")

@@ -19,7 +19,7 @@
 Headless 长时间步进：
 
 ```bash
-./scripts/run_stage1_validation.sh \
+python3 scripts/validate_env.py \
     --headless \
     --steps 600 \
     --output_dir artifacts/stage1/headless-600
@@ -31,13 +31,25 @@ Headless 长时间步进：
 GUI 渲染路径：
 
 ```bash
-./scripts/run_stage1_validation.sh \
+python3 scripts/validate_env.py \
     --steps 120 \
     --output_dir artifacts/stage1/gui-120
 ```
 
 结果：通过。Isaac Sim 日志确认创建窗口，报告位于
 `artifacts/stage1/gui-120/report.json`。
+
+GUI 持续运行入口：
+
+```bash
+python3 scripts/run_env.py
+```
+
+结果：通过。入口不设置步数上限，实测保持运行直至发送 `Ctrl+C`，随后正常清理并以
+退出码 `0` 结束。
+
+上述命令均从未激活 Conda 且包含 ROS 环境变量的普通 shell 中执行。Python bootstrap
+成功切换到固定的 Python 3.10 环境并移除 ROS/`soarm_ros` 搜索路径。
 
 ## 验收结果
 
@@ -53,6 +65,7 @@ GUI 渲染路径：
 | 腕部相机 | 通过，红色方块位于操作视野中央 |
 | 腕部光轴/方块方向余弦 | `1.0000`，要求不低于 `0.98` |
 | GUI 窗口渲染 | 通过 |
+| 无步数持续运行及 `Ctrl+C` 清理 | 通过 |
 | 验证器失败/成功退出码 | 通过，故意失败返回 `1`，正常运行返回 `0` |
 
 前视和腕部末帧已经人工查看，不仅执行了尺寸和像素方差检查。

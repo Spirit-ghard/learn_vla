@@ -6,26 +6,44 @@
 ## 环境
 
 ```bash
-conda activate lwh_isaac
 cd /home/a/lwh_code/lwh_robot_learning
 ```
+
+所有运行入口均为 Python 脚本，并会自动切换到固定的 `lwh_isaac` 解释器。项目现在及
+后续阶段不提供 shell wrapper。
+
+## 持续运行
+
+打开 GUI 并持续运行，直到关闭 Isaac Sim 窗口或在终端按 `Ctrl+C`：
+
+```bash
+python3 scripts/run_env.py
+```
+
+可选择其他已注册任务或环境数量：
+
+```bash
+python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
+```
+
+该入口以约 60 Hz 持续执行零动作，只用于查看和运行仿真环境，不响应遥操作按键。
 
 ## 运行阶段一验证
 
 Headless 验证：
 
 ```bash
-./scripts/run_stage1_validation.sh \
+python3 scripts/validate_env.py \
     --headless \
-    --steps 600 \
+    --steps 6000 \
     --output_dir artifacts/stage1/headless
 ```
 
 GUI 验证：
 
 ```bash
-./scripts/run_stage1_validation.sh \
-    --steps 600 \
+python3 scripts/validate_env.py \
+    --steps 6000 \
     --output_dir artifacts/stage1/gui
 ```
 
