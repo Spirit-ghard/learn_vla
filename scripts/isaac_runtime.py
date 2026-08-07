@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ISAAC_PYTHON = Path("/home/a/anaconda3/envs/lwh_isaac/bin/python")
 DEFAULT_ASSETS_ROOT = Path("/home/a/.local/share/ov/pkg/leisaac/assets")
 RUNTIME_MARKER = "LWH_ISAAC_RUNTIME_READY"
+SIM_ASSETS_ENV = "LWH_SIM_ASSETS_ROOT"
+LEGACY_ASSETS_ENV = "LEISAAC_ASSETS_ROOT"
 
 
 def _without_robot_paths(value: str | None) -> list[str]:
@@ -45,7 +47,6 @@ def _build_runtime_environment() -> tuple[Path, dict[str, str]]:
         PROJECT_ROOT / "dependencies/IsaacLab/source/isaaclab",
         PROJECT_ROOT / "dependencies/IsaacLab/source/isaaclab_tasks",
         PROJECT_ROOT / "dependencies/IsaacLab/source/isaaclab_assets",
-        PROJECT_ROOT / "dependencies/leisaac/source/leisaac",
         isaac_root / "python_packages",
         isaac_root / "exts/isaacsim.simulation_app",
         isaac_root / "extsDeprecated/omni.isaac.kit",
@@ -89,18 +90,20 @@ def _build_runtime_environment() -> tuple[Path, dict[str, str]]:
     env["PATH"] = os.pathsep.join([str(target_python.parent), os.environ.get("PATH", "")])
     env["CONDA_PREFIX"] = str(target_python.parent.parent)
     env["CONDA_DEFAULT_ENV"] = target_python.parent.parent.name
-    env["LEISAAC_ASSETS_ROOT"] = os.environ.get("LEISAAC_ASSETS_ROOT", str(DEFAULT_ASSETS_ROOT))
+    env[SIM_ASSETS_ENV] = os.environ.get(
+        SIM_ASSETS_ENV,
+        os.environ.get(LEGACY_ASSETS_ENV, str(DEFAULT_ASSETS_ROOT)),
+    )
     env[RUNTIME_MARKER] = "1"
     env.pop("LWH_VALIDATION_STATUS_FILE", None)
     return target_python, env
 
 
 def _validate_assets(env: dict[str, str]) -> None:
-    assets_root = Path(env["LEISAAC_ASSETS_ROOT"])
+    assets_root = Path(env[SIM_ASSETS_ENV])
     robot_asset = assets_root / "robots/so101_follower.usd"
-    scene_asset = assets_root / "scenes/table_with_cube/scene.usd"
-    if not robot_asset.is_file() or not scene_asset.is_file():
-        raise RuntimeError(f"LeIsaac assets are missing under {assets_root}")
+    if not robot_asset.is_file():
+        raise RuntimeError(f"SO101 simulation asset is missing under {assets_root}")
     if robot_asset.stat().st_size < 1_000_000:
         raise RuntimeError(f"SO101 asset is a Git LFS pointer instead of a downloaded USD: {robot_asset}")
 
@@ -131,7 +134,7 @@ def ensure_isaac_runtime(*, supervise_validation: bool = False) -> None:
         if completed.returncode != 0:
             raise SystemExit(completed.returncode)
         if status != "passed":
-            print("Stage-1 validation did not produce a passed status.", file=sys.stderr)
+            print("Isaac validation did not produce a passed status.", file=sys.stderr)
             raise SystemExit(1)
         raise SystemExit(0)
     finally:
