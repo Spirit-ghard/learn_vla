@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
@@ -108,7 +106,7 @@ def _validate_assets(env: dict[str, str]) -> None:
         raise RuntimeError(f"SO101 asset is a Git LFS pointer instead of a downloaded USD: {robot_asset}")
 
 
-def ensure_isaac_runtime(*, supervise_validation: bool = False) -> None:
+def ensure_isaac_runtime() -> None:
     """配置运行环境并用固定解释器重新执行当前 Python 入口。"""
     target_python, env = _build_runtime_environment()
     _validate_assets(env)
@@ -121,21 +119,4 @@ def ensure_isaac_runtime(*, supervise_validation: bool = False) -> None:
 
     script_path = Path(sys.argv[0]).resolve()
     command = [str(target_python), str(script_path), *sys.argv[1:]]
-    if not supervise_validation:
-        os.execve(target_python, command, env)
-
-    status_fd, status_name = tempfile.mkstemp(prefix="lwh-validation-", suffix=".status")
-    os.close(status_fd)
-    status_path = Path(status_name)
-    env["LWH_VALIDATION_STATUS_FILE"] = str(status_path)
-    try:
-        completed = subprocess.run(command, env=env, check=False)
-        status = status_path.read_text(encoding="utf-8").strip()
-        if completed.returncode != 0:
-            raise SystemExit(completed.returncode)
-        if status != "passed":
-            print("Isaac validation did not produce a passed status.", file=sys.stderr)
-            raise SystemExit(1)
-        raise SystemExit(0)
-    finally:
-        status_path.unlink(missing_ok=True)
+    os.execve(target_python, command, env)

@@ -1,12 +1,10 @@
-"""Manager-based configuration for the LWH SO101 table task."""
+"""Manager-based configuration for the LWH SO101 table scene."""
 
 from __future__ import annotations
 
 from dataclasses import MISSING
-from typing import Any
 
 import isaaclab.sim as sim_utils
-import torch
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg as RecordTerm
@@ -24,9 +22,26 @@ from lwh_isaaclab_tasks.assets import SO101_FOLLOWER_CFG, SO101_JOINT_NAMES
 from . import mdp
 
 
+TABLE_CENTER = (0.35, -0.34, 0.02)
+TABLE_SIZE = (0.62, 0.48, 0.04)
+TABLE_TOP_Z = TABLE_CENTER[2] + TABLE_SIZE[2] / 2.0
+
+BANANA_INITIAL_POS = (0.33, -0.34, TABLE_TOP_Z + 0.019)
+BANANA_RADIUS = 0.017
+BANANA_LENGTH = 0.085
+
+BASKET_CENTER = (0.52, -0.34)
+BASKET_OUTER_SIZE = (0.22, 0.16)
+BASKET_WALL_THICKNESS = 0.012
+BASKET_BASE_THICKNESS = 0.013
+BASKET_WALL_HEIGHT = 0.085
+BASKET_BASE_CENTER_Z = TABLE_TOP_Z + BASKET_BASE_THICKNESS / 2.0
+BASKET_WALL_CENTER_Z = TABLE_TOP_Z + BASKET_BASE_THICKNESS + BASKET_WALL_HEIGHT / 2.0
+
+
 @configclass
 class LwhSO101TableSceneCfg(InteractiveSceneCfg):
-    """SO101、桌面、方块、地面、灯光和相机的场景配置。"""
+    """SO101、桌面、篮子、香蕉、地面、灯光和相机的场景配置。"""
 
     robot: ArticulationCfg = SO101_FOLLOWER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -93,20 +108,116 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
 
     table = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.35, -0.34, 0.02), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=TABLE_CENTER, rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=sim_utils.CuboidCfg(
-            size=(0.62, 0.48, 0.04),
+            size=TABLE_SIZE,
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
             physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.8, dynamic_friction=0.6),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.46, 0.42, 0.36), roughness=0.75),
         ),
     )
 
-    cube: RigidObjectCfg = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Cube",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.35, -0.34, 0.065), rot=(1.0, 0.0, 0.0, 0.0)),
+    basket_base = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/BasketBase",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(BASKET_CENTER[0], BASKET_CENTER[1], BASKET_BASE_CENTER_Z),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
         spawn=sim_utils.CuboidCfg(
-            size=(0.04, 0.04, 0.04),
+            size=(BASKET_OUTER_SIZE[0], BASKET_OUTER_SIZE[1], BASKET_BASE_THICKNESS),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.86, 0.72, 0.46), roughness=0.8),
+        ),
+    )
+
+    basket_front = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/BasketFrontWall",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(
+                BASKET_CENTER[0],
+                BASKET_CENTER[1] - BASKET_OUTER_SIZE[1] / 2.0 + BASKET_WALL_THICKNESS / 2.0,
+                BASKET_WALL_CENTER_Z,
+            ),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(BASKET_OUTER_SIZE[0], BASKET_WALL_THICKNESS, BASKET_WALL_HEIGHT),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.78, 0.58, 0.32), roughness=0.8),
+        ),
+    )
+
+    basket_back = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/BasketBackWall",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(
+                BASKET_CENTER[0],
+                BASKET_CENTER[1] + BASKET_OUTER_SIZE[1] / 2.0 - BASKET_WALL_THICKNESS / 2.0,
+                BASKET_WALL_CENTER_Z,
+            ),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(BASKET_OUTER_SIZE[0], BASKET_WALL_THICKNESS, BASKET_WALL_HEIGHT),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.78, 0.58, 0.32), roughness=0.8),
+        ),
+    )
+
+    basket_left = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/BasketLeftWall",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(
+                BASKET_CENTER[0] - BASKET_OUTER_SIZE[0] / 2.0 + BASKET_WALL_THICKNESS / 2.0,
+                BASKET_CENTER[1],
+                BASKET_WALL_CENTER_Z,
+            ),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(
+                BASKET_WALL_THICKNESS,
+                BASKET_OUTER_SIZE[1] - 2.0 * BASKET_WALL_THICKNESS,
+                BASKET_WALL_HEIGHT,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.78, 0.58, 0.32), roughness=0.8),
+        ),
+    )
+
+    basket_right = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/BasketRightWall",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(
+                BASKET_CENTER[0] + BASKET_OUTER_SIZE[0] / 2.0 - BASKET_WALL_THICKNESS / 2.0,
+                BASKET_CENTER[1],
+                BASKET_WALL_CENTER_Z,
+            ),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(
+                BASKET_WALL_THICKNESS,
+                BASKET_OUTER_SIZE[1] - 2.0 * BASKET_WALL_THICKNESS,
+                BASKET_WALL_HEIGHT,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.78, 0.58, 0.32), roughness=0.8),
+        ),
+    )
+
+    banana: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Banana",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=BANANA_INITIAL_POS, rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=sim_utils.CapsuleCfg(
+            radius=BANANA_RADIUS,
+            height=BANANA_LENGTH,
+            axis="X",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=1,
@@ -115,10 +226,10 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
                 max_depenetration_velocity=5.0,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.04),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.035),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.05, 0.04), roughness=0.55),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=0.8),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.96, 0.78, 0.10), roughness=0.58),
         ),
     )
 
@@ -130,10 +241,23 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class LwhSO101ActionsCfg:
-    """SO101 动作项配置，运行入口会按遥操作设备填充。"""
+    """SO101 仿真动作空间，阶段一只用零动作持续运行场景。"""
 
-    arm_action: mdp.ActionTermCfg = MISSING
-    gripper_action: mdp.ActionTermCfg = MISSING
+    arm_action: mdp.ActionTermCfg = mdp.DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
+        body_name="gripper",
+        controller=mdp.DifferentialIKControllerCfg(
+            command_type="pose",
+            ik_method="dls",
+            use_relative_mode=True,
+        ),
+    )
+    gripper_action: mdp.ActionTermCfg = mdp.RelativeJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=["shoulder_pan", "gripper"],
+        scale=1.0,
+    )
 
 
 @configclass
@@ -177,12 +301,12 @@ class LwhSO101ObservationsCfg:
 
 @configclass
 class LwhSO101RewardsCfg:
-    """阶段一/二暂不训练 RL 奖励。"""
+    """阶段一只搭场景，暂不定义 RL 奖励。"""
 
 
 @configclass
 class LwhSO101TerminationsCfg:
-    """默认只保留超时终止；遥操作入口会关闭自动超时。"""
+    """默认只保留超时终止。"""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
@@ -202,15 +326,15 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
     dynamic_reset_gripper_effort_limit: bool = False
     robot_name: str = "so101_follower"
     default_feature_joint_names: list[str] = MISSING
-    task_description: str = "Manipulate the red cube on the table."
+    task_description: str = "Pick the banana and place it into the basket."
 
     def __post_init__(self) -> None:
         super().__post_init__()
 
         self.decimation = 1
         self.episode_length_s = 25.0
-        self.viewer.eye = (-0.45, -1.05, 0.70)
-        self.viewer.lookat = (0.35, -0.35, 0.08)
+        self.viewer.eye = (-0.40, -1.05, 0.72)
+        self.viewer.lookat = (0.40, -0.35, 0.10)
 
         self.sim.dt = 1 / 60.0
         self.sim.render_interval = 2
@@ -220,45 +344,7 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
 
         self.scene.ee_frame.visualizer_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
 
-        # 机器人、桌面和方块的位置在同一个任务配置内显式定义，避免依赖外部任务模板。
+        # 机器人、桌面、篮子和香蕉的位置在同一个任务配置内显式定义，避免依赖外部任务模板。
         self.scene.robot.init_state.pos = (0.35, -0.64, 0.01)
-        self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SO101_JOINT_NAMES]
-
-    def use_teleop_device(self, teleop_device: str) -> None:
-        """按设备填充动作空间；当前阶段只支持仿真键盘。"""
-        if teleop_device != "keyboard":
-            raise ValueError(f"Unsupported teleop device for this task: {teleop_device}")
-        self.task_type = teleop_device
-        self.actions.arm_action = mdp.DifferentialInverseKinematicsActionCfg(
-            asset_name="robot",
-            joint_names=["shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
-            body_name="gripper",
-            controller=mdp.DifferentialIKControllerCfg(
-                command_type="pose",
-                ik_method="dls",
-                use_relative_mode=True,
-            ),
-        )
-        self.actions.gripper_action = mdp.RelativeJointPositionActionCfg(
-            asset_name="robot",
-            joint_names=["shoulder_pan", "gripper"],
-            scale=1.0,
-        )
-        # 键盘 IK 模式下固定 SO101 底座并关闭机器人本体重力，减少仿真抖动。
         self.scene.robot.spawn.rigid_props.disable_gravity = True
-
-    def preprocess_device_action(self, action: dict[str, Any], teleop_device) -> torch.Tensor:
-        """将键盘设备的 8 维增量动作整理成 IsaacLab action tensor。"""
-        if action.get("keyboard") is None:
-            raise NotImplementedError(f"Unsupported device action: {teleop_device.device_type}")
-        joint_state = torch.as_tensor(action["joint_state"], device=teleop_device.env.device, dtype=torch.float32)
-        if joint_state.ndim == 1:
-            processed_action = torch.zeros(
-                teleop_device.env.num_envs,
-                8,
-                device=teleop_device.env.device,
-                dtype=torch.float32,
-            )
-            processed_action[:, :] = joint_state
-            return processed_action
-        return joint_state
+        self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SO101_JOINT_NAMES]

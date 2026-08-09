@@ -1,54 +1,44 @@
 # LWH Robot Learning
 
-本项目当前只实现第一阶段：IsaacLab 中的 SO101 桌面仿真任务。
-项目不会连接或控制真实机器人，也不依赖 ROS。
+当前分支只包含第一阶段：基于 IsaacLab 的 SO101 桌面仿真场景。
 
-## 环境
+场景内容：
+
+- SO101 Follower
+- 桌面、几何篮子和黄色香蕉
+- 地面和灯光
+- 前视相机和腕部相机
+- 关节状态、末端状态、相机图像和上一帧动作观测
+- IsaacLab `ManagerBasedRLEnv` 任务注册：`Lwh-SO101-Table-v0`
+
+本阶段只打开并持续运行仿真环境，不包含遥操作、录制、回放、训练或远程推理入口。
+代码不连接真实机器人，不启动 ROS，不访问串口。
+
+## 使用方式
+
+进入项目目录：
 
 ```bash
 cd /home/a/lwh_code/lwh_robot_learning
 ```
 
-所有运行入口均为 Python 脚本，并会自动切换到固定的 `lwh_isaac` 解释器。项目现在及
-后续阶段不提供 shell wrapper。
-
-## 持续运行
-
-打开 GUI 并持续运行，直到关闭 Isaac Sim 窗口或在终端按 `Ctrl+C`：
-
-```bash
-python3 scripts/run_env.py
-```
-
-可选择其他已注册任务或环境数量：
+打开 Isaac Sim GUI 并持续运行场景：
 
 ```bash
 python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
 ```
 
-该入口以约 60 Hz 持续执行零动作，只用于查看和运行仿真环境，不响应遥操作按键。
-
-## 运行阶段一验证
-
-Headless 验证：
+也可以省略参数，默认就是同一个任务和单环境：
 
 ```bash
-python3 scripts/validate_env.py \
-    --headless \
-    --steps 6000 \
-    --output_dir artifacts/stage1/headless
+python3 scripts/run_env.py
 ```
 
-GUI 验证：
+退出方式：
 
-```bash
-python3 scripts/validate_env.py \
-    --steps 6000 \
-    --output_dir artifacts/stage1/gui
+```text
+关闭 Isaac Sim 窗口，或在终端按 Ctrl+C。
 ```
 
-验证脚本会创建 `Lwh-SO101-Table-v0`，检查关节顺序、方块物理状态、
-默认重置和两路相机，并保存 JSON 报告与相机图像。
-
-版本组合和已知兼容处理见 [docs/compatibility.md](docs/compatibility.md)，本机实测结果见
-[docs/stage1_validation.md](docs/stage1_validation.md)。
+运行入口会自动切换到固定的 IsaacLab Python 环境，并清理继承自 ROS 或真实机器人工程的
+Python/动态库路径，保证这里只运行仿真。

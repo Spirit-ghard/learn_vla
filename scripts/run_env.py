@@ -62,8 +62,7 @@ def main() -> None:
         raise ValueError("--num_envs must be positive.")
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    # 这里只生成键盘模式对应的仿真动作空间，不创建键盘或真实机器人设备。
-    env_cfg.use_teleop_device("keyboard")
+    # 阶段一只打开仿真场景并持续执行零动作，不创建遥操作或真实机器人设备。
     env_cfg.recorders = None
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
