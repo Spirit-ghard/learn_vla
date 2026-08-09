@@ -21,6 +21,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate an LWH IsaacLab task in simulation.")
     parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
+    parser.add_argument(
+        "--camera_mode",
+        default="dual",
+        choices=["front", "dual"],
+        help="Camera set to validate. front disables wrist; dual validates front+wrist.",
+    )
     parser.add_argument("--steps", type=int, default=600, help="Number of control steps before the reset test.")
     parser.add_argument(
         "--output_dir",
@@ -67,6 +73,12 @@ def write_process_status(status: str) -> None:
     status_path = os.environ.get("LWH_VALIDATION_STATUS_FILE")
     if status_path:
         Path(status_path).write_text(status + "\n", encoding="utf-8")
+
+
+def delete_attribute(obj, attr_name: str) -> None:
+    """按 LeIsaac 配置风格在运行时移除不需要的相机项。"""
+    if hasattr(obj, attr_name):
+        delattr(obj, attr_name)
 
 
 def image_report(image: torch.Tensor, output_path: Path) -> dict[str, object]:
@@ -117,6 +129,9 @@ def main() -> None:
     # 这里只配置仿真动作空间，不创建键盘设备，也不访问真实机器人。
     env_cfg.use_teleop_device("keyboard")
     env_cfg.recorders = None
+    if args_cli.camera_mode == "front":
+        delete_attribute(env_cfg.scene, "wrist")
+        delete_attribute(env_cfg.observations.policy, "wrist")
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     progress("environment-created")
@@ -124,7 +139,9 @@ def main() -> None:
         observations, _ = env.reset()
         progress("initial-reset-complete")
         policy_obs = observations["policy"]
-        required_terms = {"joint_pos", "joint_vel", "front", "wrist"}
+        required_terms = {"joint_pos", "joint_vel", "front"}
+        if args_cli.camera_mode == "dual":
+            required_terms.add("wrist")
         missing_terms = required_terms.difference(policy_obs)
         if missing_terms:
             raise AssertionError(f"Missing policy observations: {sorted(missing_terms)}")
@@ -164,7 +181,9 @@ def main() -> None:
         gripper_quaternion = robot.data.body_quat_w[:, gripper_ids[0]].clone()
 
         front = image_report(policy_obs["front"], args_cli.output_dir / "front.png")
-        wrist = image_report(policy_obs["wrist"], args_cli.output_dir / "wrist.png")
+        wrist = None
+        if args_cli.camera_mode == "dual":
+            wrist = image_report(policy_obs["wrist"], args_cli.output_dir / "wrist.png")
         progress("camera-samples-saved")
 
         # 先把方块移开，再调用环境 reset，验证默认 reset_scene_to_default 事件。
@@ -191,6 +210,7 @@ def main() -> None:
             "task": spec.id,
             "entry_point": str(spec.entry_point),
             "num_envs": env.num_envs,
+            "camera_mode": args_cli.camera_mode,
             "device": str(env.device),
             "steps": args_cli.steps,
             "physics_dt_s": float(env.physics_dt),
@@ -207,8 +227,9 @@ def main() -> None:
             "gripper_position_m": gripper_position[0].cpu().tolist(),
             "gripper_quaternion_wxyz": gripper_quaternion[0].cpu().tolist(),
             "front_camera": front,
-            "wrist_camera": wrist,
         }
+        if wrist is not None:
+            report["wrist_camera"] = wrist
         report_path = args_cli.output_dir / "report.json"
         report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2, ensure_ascii=False), flush=True)

@@ -30,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
     parser.add_argument(
+        "--camera_mode",
+        default="dual",
+        choices=["front", "dual"],
+        help="Camera set for simulation observations. front disables wrist; dual enables front+wrist.",
+    )
+    parser.add_argument(
         "--teleop_render_interval",
         type=int,
         default=1,
@@ -73,6 +79,12 @@ import torch  # noqa: E402
 import lwh_isaaclab_tasks  # noqa: E402,F401  # 导入后注册自定义 task id。
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from lwh_isaaclab_tasks.devices import SO101Keyboard  # noqa: E402
+
+
+def delete_attribute(obj, attr_name: str) -> None:
+    """按 LeIsaac 配置风格在运行时移除不需要的相机项。"""
+    if hasattr(obj, attr_name):
+        delattr(obj, attr_name)
 
 
 def write_process_status(status: str) -> None:
@@ -177,7 +189,10 @@ def main() -> None:
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.use_teleop_device("keyboard")
     env_cfg.recorders = None
-    # 默认对齐 LeIsaac LiftCube：单 front 相机，IsaacLab 默认渲染设置，render_interval=1。
+    if args_cli.camera_mode == "front":
+        delete_attribute(env_cfg.scene, "wrist")
+        delete_attribute(env_cfg.observations.policy, "wrist")
+    # 渲染默认对齐 LeIsaac LiftCube：IsaacLab 默认设置，render_interval=1。
     env_cfg.sim.render_interval = args_cli.teleop_render_interval
     if args_cli.quality:
         env_cfg.sim.render.antialiasing_mode = "FXAA"
@@ -245,7 +260,8 @@ def main() -> None:
         robot = env.scene["robot"]
         episode_initial_joint_pos = robot.data.joint_pos.clone()
         print(
-            f"LWH_TELEOP_READY task={args_cli.task} num_envs={env.num_envs} control_hz=60.0",
+            f"LWH_TELEOP_READY task={args_cli.task} num_envs={env.num_envs} "
+            f"camera_mode={args_cli.camera_mode} control_hz=60.0",
             flush=True,
         )
         print(
@@ -363,6 +379,7 @@ def main() -> None:
                 "status": "passed",
                 "task": args_cli.task,
                 "num_envs": env.num_envs,
+                "camera_mode": args_cli.camera_mode,
                 "validation_method": "carb.input.InputProvider.buffer_keyboard_key_event",
                 "render_config": render_config,
                 "target_loop_hz": 60.0,
