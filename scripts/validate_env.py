@@ -45,7 +45,6 @@ import torch  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import lwh_isaaclab_tasks  # noqa: F401,E402  # 导入后注册自定义 task id。
-from isaaclab.utils.math import quat_apply  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
 
@@ -102,23 +101,6 @@ def assert_finite_observations(observations: dict[str, torch.Tensor]) -> None:
             raise AssertionError(f"Observation '{name}' contains NaN or Inf values.")
 
 
-def camera_geometry_report(camera, target_position: torch.Tensor) -> dict[str, object]:
-    """记录 ROS 相机光轴相对目标点的几何关系。"""
-    position = camera.data.pos_w.clone()
-    quaternion_ros = camera.data.quat_w_ros.clone()
-    optical_axis = torch.tensor((0.0, 0.0, 1.0), device=position.device).expand_as(position)
-    forward = quat_apply(quaternion_ros, optical_axis)
-    target_direction = torch.nn.functional.normalize(target_position - position, dim=-1)
-    alignment = torch.sum(forward * target_direction, dim=-1)
-    return {
-        "position_m": position[0].cpu().tolist(),
-        "quaternion_wxyz_ros": quaternion_ros[0].cpu().tolist(),
-        "forward_axis_world": forward[0].cpu().tolist(),
-        "target_direction_world": target_direction[0].cpu().tolist(),
-        "target_alignment_cosine": float(alignment[0]),
-    }
-
-
 def main() -> None:
     if args_cli.num_envs != 1:
         raise ValueError("Stage-1 camera/reset validation currently requires --num_envs 1.")
@@ -142,7 +124,7 @@ def main() -> None:
         observations, _ = env.reset()
         progress("initial-reset-complete")
         policy_obs = observations["policy"]
-        required_terms = {"joint_pos", "joint_vel", "front", "wrist"}
+        required_terms = {"joint_pos", "joint_vel", "front"}
         missing_terms = required_terms.difference(policy_obs)
         if missing_terms:
             raise AssertionError(f"Missing policy observations: {sorted(missing_terms)}")
@@ -177,18 +159,11 @@ def main() -> None:
         if float(settled_cube_state[0, 2]) < 0.050:
             raise AssertionError(f"Cube fell through the table: z={float(settled_cube_state[0, 2]):.6f}")
 
-        wrist_geometry = camera_geometry_report(env.scene["wrist"], settled_cube_state[:, :3])
-        if wrist_geometry["target_alignment_cosine"] < 0.98:
-            raise AssertionError(
-                "Wrist camera does not face the manipulation area: "
-                f"cosine={wrist_geometry['target_alignment_cosine']:.6f}"
-            )
         gripper_ids, _ = robot.find_bodies("gripper")
         gripper_position = robot.data.body_pos_w[:, gripper_ids[0]].clone()
         gripper_quaternion = robot.data.body_quat_w[:, gripper_ids[0]].clone()
 
         front = image_report(policy_obs["front"], args_cli.output_dir / "front.png")
-        wrist = image_report(policy_obs["wrist"], args_cli.output_dir / "wrist.png")
         progress("camera-samples-saved")
 
         # 先把方块移开，再调用环境 reset，验证默认 reset_scene_to_default 事件。
@@ -231,8 +206,6 @@ def main() -> None:
             "gripper_position_m": gripper_position[0].cpu().tolist(),
             "gripper_quaternion_wxyz": gripper_quaternion[0].cpu().tolist(),
             "front_camera": front,
-            "wrist_camera": wrist,
-            "wrist_camera_geometry": wrist_geometry,
         }
         report_path = args_cli.output_dir / "report.json"
         report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

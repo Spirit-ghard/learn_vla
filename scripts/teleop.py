@@ -32,27 +32,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--teleop_render_interval",
         type=int,
-        default=2,
-        help="Physics steps per render/camera update. 2=30 Hz, 3=20 Hz, 4=15 Hz.",
+        default=1,
+        help="Physics steps per render. LeIsaac LiftCube keeps the IsaacLab default 1.",
     )
     parser.add_argument(
         "--teleop_antialiasing_mode",
-        default="FXAA",
+        default=None,
         choices=["Off", "TAA", "FXAA", "DLSS"],
-        help="Render anti-aliasing mode used by the teleop viewer and cameras.",
+        help="Optional render anti-aliasing override. Leave unset to match LeIsaac defaults.",
     )
     parser.add_argument(
         "--teleop_rendering_mode",
-        default="quality",
+        default=None,
         choices=["performance", "balanced", "quality"],
-        help="Fallback IsaacLab rendering preset when AppLauncher does not set one.",
+        help="Optional IsaacLab rendering preset. Leave unset to match LeIsaac defaults.",
+    )
+    parser.add_argument(
+        "--quality",
+        action="store_true",
+        help="Match LeIsaac --quality: set FXAA and the quality rendering preset.",
     )
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
     if args.headless:
         parser.error("Keyboard teleoperation requires a GUI; do not use --headless.")
     args.enable_cameras = True
-    if args.rendering_mode is None:
+    if args.rendering_mode is None and args.teleop_rendering_mode is not None:
         args.rendering_mode = args.teleop_rendering_mode
     return args
 
@@ -124,6 +129,9 @@ def read_render_config(env) -> dict[str, object]:
     dlss_value = int(settings.get("/rtx/post/dlss/execMode"))
     aa_names = {0: "Off", 1: "TAA", 2: "FXAA", 3: "DLSS", 4: "DLAA"}
     dlss_names = {0: "performance", 1: "balanced", 2: "quality", 3: "auto"}
+    camera_hz = {"front": float(1.0 / env.scene["front"].cfg.update_period)}
+    if "wrist" in env.scene.keys():
+        camera_hz["wrist"] = float(1.0 / env.scene["wrist"].cfg.update_period)
     return {
         "preset": args_cli.rendering_mode,
         "antialiasing": aa_names.get(aa_value, f"unknown-{aa_value}"),
@@ -131,23 +139,26 @@ def read_render_config(env) -> dict[str, object]:
         "control_hz": float(1.0 / env.step_dt),
         "render_hz": float(1.0 / (env.physics_dt * env.cfg.sim.render_interval)),
         "render_interval": int(env.cfg.sim.render_interval),
-        "front_camera_hz": float(1.0 / env.scene["front"].cfg.update_period),
-        "wrist_camera_hz": float(1.0 / env.scene["wrist"].cfg.update_period),
+        "camera_hz": camera_hz,
     }
 
 
 class RateLimiter:
-    """将控制循环上限限制在约 60 Hz。"""
+    """将控制循环上限限制在约 60 Hz，并在等待时刷新窗口。"""
 
     def __init__(self, hz: float) -> None:
         self._period = 1.0 / hz
+        self._render_period = min(0.0166, self._period)
         self._next_step = time.perf_counter()
 
-    def sleep(self) -> None:
+    def sleep(self, env) -> None:
         self._next_step += self._period
-        remaining = self._next_step - time.perf_counter()
-        if remaining > 0.0:
-            time.sleep(remaining)
+        while simulation_app.is_running():
+            remaining = self._next_step - time.perf_counter()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(self._render_period, remaining))
+            env.sim.render()
 
         if self._next_step < time.perf_counter() - self._period:
             self._next_step = time.perf_counter()
@@ -166,9 +177,16 @@ def main() -> None:
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.use_teleop_device("keyboard")
     env_cfg.recorders = None
-    # 画质和帧率都留成显式参数，方便你按卡顿程度自己试。
-    env_cfg.sim.render.antialiasing_mode = args_cli.teleop_antialiasing_mode
+    # 默认对齐 LeIsaac LiftCube：单 front 相机，IsaacLab 默认渲染设置，render_interval=1。
     env_cfg.sim.render_interval = args_cli.teleop_render_interval
+    if args_cli.quality:
+        env_cfg.sim.render.antialiasing_mode = "FXAA"
+        env_cfg.sim.render.rendering_mode = "quality"
+    else:
+        if args_cli.teleop_antialiasing_mode is not None:
+            env_cfg.sim.render.antialiasing_mode = args_cli.teleop_antialiasing_mode
+        if args_cli.teleop_rendering_mode is not None:
+            env_cfg.sim.render.rendering_mode = args_cli.teleop_rendering_mode
     # 遥操作 episode 只由 R/N 显式重置，不使用模板中的自动超时。
     if hasattr(env_cfg.terminations, "time_out"):
         env_cfg.terminations.time_out = None
@@ -234,7 +252,7 @@ def main() -> None:
             "LWH_RENDER_CONFIG "
             f"preset={render_config['preset']} antialiasing={render_config['antialiasing']} "
             f"dlss_mode={render_config['dlss_mode']} render_hz={render_config['render_hz']:.1f} "
-            f"camera_hz={render_config['front_camera_hz']:.1f} "
+            f"front_camera_hz={render_config['camera_hz']['front']:.1f} "
             f"render_interval={render_config['render_interval']}",
             flush=True,
         )
@@ -306,7 +324,7 @@ def main() -> None:
                     episode_max_joint_delta = max(episode_max_joint_delta, joint_delta)
                     max_joint_delta = max(max_joint_delta, joint_delta)
 
-            rate_limiter.sleep()
+            rate_limiter.sleep(env)
 
             if VALIDATION_MODE and loop_iterations >= validation_stop_frame:
                 print("LWH_TELEOP_VALIDATION_SEQUENCE_COMPLETE", flush=True)
@@ -315,7 +333,7 @@ def main() -> None:
         loop_elapsed_s = time.perf_counter() - loop_started_at
         if VALIDATION_MODE:
             sim_control_hz = float(1.0 / env.step_dt)
-            if render_config["antialiasing"] != "FXAA":
+            if args_cli.quality and render_config["antialiasing"] != "FXAA":
                 raise AssertionError(f"Expected FXAA, got {render_config}.")
             if abs(sim_control_hz - 60.0) > 1.0e-6:
                 raise AssertionError(f"Expected a 60 Hz simulation control step, got {sim_control_hz}.")
@@ -335,7 +353,7 @@ def main() -> None:
                 raise AssertionError("No policy observation was produced during teleoperation.")
             camera_observations = {
                 name: validate_camera_observation(latest_policy_observation[name])
-                for name in ("front", "wrist")
+                for name in ("front",)
             }
 
             report = {
