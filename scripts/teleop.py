@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
         help="Camera set for simulation observations. front disables wrist; dual enables front+wrist.",
     )
     parser.add_argument(
+        "--ground_mode",
+        default="off",
+        choices=["off", "on"],
+        help="Ground plane mode for teleoperation. off matches LeIsaac LiftCube performance profile.",
+    )
+    parser.add_argument(
         "--teleop_render_interval",
         type=int,
         default=1,
@@ -192,6 +198,9 @@ def main() -> None:
     if args_cli.camera_mode == "front":
         delete_attribute(env_cfg.scene, "wrist")
         delete_attribute(env_cfg.observations.policy, "wrist")
+    if args_cli.ground_mode == "off":
+        # LeIsaac LiftCube 的桌面任务没有额外大地面；去掉 ground 可显著降低 GUI 渲染负担。
+        delete_attribute(env_cfg.scene, "ground")
     # 渲染默认对齐 LeIsaac LiftCube：IsaacLab 默认设置，render_interval=1。
     env_cfg.sim.render_interval = args_cli.teleop_render_interval
     if args_cli.quality:
@@ -261,7 +270,7 @@ def main() -> None:
         episode_initial_joint_pos = robot.data.joint_pos.clone()
         print(
             f"LWH_TELEOP_READY task={args_cli.task} num_envs={env.num_envs} "
-            f"camera_mode={args_cli.camera_mode} control_hz=60.0",
+            f"camera_mode={args_cli.camera_mode} ground_mode={args_cli.ground_mode} control_hz=60.0",
             flush=True,
         )
         print(
@@ -380,6 +389,7 @@ def main() -> None:
                 "task": args_cli.task,
                 "num_envs": env.num_envs,
                 "camera_mode": args_cli.camera_mode,
+                "ground_mode": args_cli.ground_mode,
                 "validation_method": "carb.input.InputProvider.buffer_keyboard_key_event",
                 "render_config": render_config,
                 "target_loop_hz": 60.0,

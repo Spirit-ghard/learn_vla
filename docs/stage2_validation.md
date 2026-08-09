@@ -21,6 +21,7 @@ dependencies/leisaac
 | 默认渲染 preset | IsaacLab 默认 |
 | 默认抗锯齿 | IsaacLab 默认 |
 | 质量开关 | `--quality` 时启用 `FXAA + quality` |
+| teleop ground | 默认 `--ground_mode off`，对齐 LeIsaac 桌面任务性能 |
 
 LeIsaac 对照启动结果：
 
@@ -39,6 +40,7 @@ LeIsaac 对照启动结果：
 | front 位姿 | LeIsaac LiftCube front | 本项目原 front |
 | wrist 位姿 | disabled | `dual` 模式使用本项目原 wrist |
 | 图像规格 | `640 x 480 @ 30 FPS` | 每路 `640 x 480 @ 30 FPS` |
+| teleop ground | 保持 task 配置 | 运行入口默认移除额外 ground，可用 `--ground_mode on` 恢复 |
 
 正式使用：
 
@@ -68,5 +70,8 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --quality
 
 1. 先用 `--camera_mode front` 对齐 LeIsaac 单相机基线。
 2. 单相机流畅后再用 `--camera_mode dual` 评估双相机。
-3. 双相机卡顿时先尝试 `--teleop_render_interval 2`。
-4. `--quality` 只用于画质确认，不作为默认录制配置。
+3. 如需完整地面，再显式加 `--ground_mode on`。
+4. 双相机卡顿时先尝试 `--teleop_render_interval 2`。
+5. `--quality` 只用于画质确认，不作为默认录制配置。
+
+GUI 性能对比见 `docs/stage2_gui_performance_report.md`。
