@@ -124,7 +124,7 @@ def main() -> None:
         observations, _ = env.reset()
         progress("initial-reset-complete")
         policy_obs = observations["policy"]
-        required_terms = {"joint_pos", "joint_vel", "front"}
+        required_terms = {"joint_pos", "joint_vel", "front", "wrist"}
         missing_terms = required_terms.difference(policy_obs)
         if missing_terms:
             raise AssertionError(f"Missing policy observations: {sorted(missing_terms)}")
@@ -164,6 +164,7 @@ def main() -> None:
         gripper_quaternion = robot.data.body_quat_w[:, gripper_ids[0]].clone()
 
         front = image_report(policy_obs["front"], args_cli.output_dir / "front.png")
+        wrist = image_report(policy_obs["wrist"], args_cli.output_dir / "wrist.png")
         progress("camera-samples-saved")
 
         # 先把方块移开，再调用环境 reset，验证默认 reset_scene_to_default 事件。
@@ -206,6 +207,7 @@ def main() -> None:
             "gripper_position_m": gripper_position[0].cpu().tolist(),
             "gripper_quaternion_wxyz": gripper_quaternion[0].cpu().tolist(),
             "front_camera": front,
+            "wrist_camera": wrist,
         }
         report_path = args_cli.output_dir / "report.json"
         report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

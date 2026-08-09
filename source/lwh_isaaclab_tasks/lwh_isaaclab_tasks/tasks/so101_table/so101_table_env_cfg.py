@@ -26,7 +26,7 @@ from . import mdp
 
 @configclass
 class LwhSO101TableSceneCfg(InteractiveSceneCfg):
-    """SO101、桌面、方块、地面、灯光和前视相机的场景配置。"""
+    """SO101、桌面、方块、地面、灯光和双相机的场景配置。"""
 
     robot: ArticulationCfg = SO101_FOLLOWER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -43,16 +43,36 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
         ],
     )
 
-    front: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base/front_camera",
+    wrist: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/gripper/wrist_camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(-0.6, -0.75, 0.38),
-            rot=(0.77337, 0.55078, -0.2374, -0.20537),
-            convention="opengl",
+            pos=(-0.001, 0.1, -0.04),
+            rot=(-0.704022, -0.065999, 0.646586, -0.286221),
+            convention="ros",
         ),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=40.6,
+            focal_length=36.5,
+            focus_distance=400.0,
+            horizontal_aperture=36.83,
+            clipping_range=(0.01, 50.0),
+            lock_camera=True,
+        ),
+        width=640,
+        height=480,
+        update_period=1 / 30.0,
+    )
+
+    front: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base/front_camera",
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.0, -0.5, 0.6),
+            rot=(0.1650476, -0.9862856, 0.0, 0.0),
+            convention="ros",
+        ),
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=28.7,
             focus_distance=400.0,
             horizontal_aperture=38.11,
             clipping_range=(0.01, 50.0),
@@ -125,7 +145,7 @@ class LwhSO101EventCfg:
 
 @configclass
 class LwhSO101ObservationsCfg:
-    """Policy 观测契约：关节状态、前视图像、末端状态和上一帧动作。"""
+    """Policy 观测契约：关节状态、双相机图像、末端状态和上一帧动作。"""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -134,6 +154,10 @@ class LwhSO101ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
         actions = ObsTerm(func=mdp.last_action)
+        wrist = ObsTerm(
+            func=mdp.image,
+            params={"sensor_cfg": SceneEntityCfg("wrist"), "data_type": "rgb", "normalize": False},
+        )
         front = ObsTerm(
             func=mdp.image,
             params={"sensor_cfg": SceneEntityCfg("front"), "data_type": "rgb", "normalize": False},

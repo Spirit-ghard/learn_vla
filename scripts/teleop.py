@@ -252,7 +252,7 @@ def main() -> None:
             "LWH_RENDER_CONFIG "
             f"preset={render_config['preset']} antialiasing={render_config['antialiasing']} "
             f"dlss_mode={render_config['dlss_mode']} render_hz={render_config['render_hz']:.1f} "
-            f"front_camera_hz={render_config['camera_hz']['front']:.1f} "
+            f"camera_hz={render_config['camera_hz']} "
             f"render_interval={render_config['render_interval']}",
             flush=True,
         )
@@ -351,9 +351,12 @@ def main() -> None:
                 )
             if latest_policy_observation is None:
                 raise AssertionError("No policy observation was produced during teleoperation.")
+            camera_names = ["front"]
+            if "wrist" in latest_policy_observation:
+                camera_names.append("wrist")
             camera_observations = {
                 name: validate_camera_observation(latest_policy_observation[name])
-                for name in ("front",)
+                for name in camera_names
             }
 
             report = {

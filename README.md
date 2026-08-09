@@ -1,8 +1,12 @@
 # LWH Robot Learning
 
-当前分支包含第一阶段场景和第二阶段键盘遥操作。第二阶段先对齐 LeIsaac
-`LeIsaac-SO101-LiftCube-v0` 的轻量运行方式：单前视相机、`640x480`、`30 FPS`、
-`60 Hz` 控制循环。
+当前分支是 `stage_2_1`：在第二阶段键盘遥操作基础上，尝试恢复双相机输入。
+
+策略：
+
+- 渲染和运行参数继续对齐 LeIsaac `LeIsaac-SO101-LiftCube-v0`。
+- 相机位置使用本项目之前自定义的 `front` 和 `wrist` 位姿。
+- 默认不强制 `quality + FXAA`，先使用 IsaacLab/LeIsaac 默认渲染路径。
 
 项目只运行 IsaacLab 仿真，不连接真实机器人，不启动 ROS，不访问串口。
 
@@ -12,12 +16,7 @@
 
 ```bash
 cd /home/a/lwh_code/lwh_robot_learning
-```
-
-打开场景持续运行：
-
-```bash
-python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
+git checkout stage_2_1
 ```
 
 启动键盘遥操作：
@@ -40,13 +39,11 @@ N 成功并重置
 Ctrl+C 或关闭窗口退出
 ```
 
-## LeIsaac 对齐配置
-
-默认配置：
+## 当前配置
 
 ```text
-front camera: 640 x 480, 30 FPS
-wrist camera: disabled
+front camera: 640 x 480, 30 FPS, 本项目原 front 位姿
+wrist camera: 640 x 480, 30 FPS, 本项目原 wrist 位姿
 control loop: 60 Hz
 sim dt: 1 / 60 s
 render_interval: 1
@@ -63,15 +60,5 @@ python3 scripts/teleop.py \
   --quality
 ```
 
-如果要手动试参数：
-
-```bash
-python3 scripts/teleop.py \
-  --task Lwh-SO101-Table-v0 \
-  --num_envs 1 \
-  --teleop_render_interval 1 \
-  --teleop_antialiasing_mode FXAA \
-  --teleop_rendering_mode quality
-```
-
-先以默认配置为准。默认模式和 LeIsaac LiftCube 更接近，负载比之前双相机模式低。
+如果双相机默认配置开始卡顿，先退回 `stage_2` 的单相机版本采集遥操作手感；`stage_2_1`
+用于评估双相机是否能在当前机器上保持可接受延迟。
