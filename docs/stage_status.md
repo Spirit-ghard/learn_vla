@@ -115,9 +115,9 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode d
 | --- | --- | --- |
 | `--task` | `Lwh-SO101-Table-v0` | Gym task id |
 | `--num_envs` | `1` | 仿真环境数量，键盘遥操作建议 1 |
-| `--camera_mode` | `dual` | `front` 只保留前视；`dual` 保留 front+wrist |
+| `--camera_mode` | `front` | `front` 只保留前视并作为高频遥操作基线；`dual` 保留 front+wrist |
 | `--ground_mode` | `off` | teleop 默认移除额外 ground，对齐 LeIsaac GUI 性能 |
-| `--teleop_render_interval` | `1` | 每多少个 physics step 渲染一次 |
+| `--teleop_render_interval` | `2` | 每多少个 physics step 渲染一次；默认目标为 60 Hz 控制、30 Hz 图像/渲染 |
 | `--teleop_antialiasing_mode` | unset | 可选覆盖 AA |
 | `--teleop_rendering_mode` | unset | 可选覆盖 rendering preset |
 | `--quality` | false | 对齐 LeIsaac `--quality`，启用 `FXAA + quality` |
@@ -145,7 +145,7 @@ Ctrl+C 或关闭窗口退出
 - `N` 触发成功 reset。
 - 单相机和双相机模式均可创建、step、出图。
 - `--ground_mode on` 可恢复完整 ground 并正常运行。
-- 默认 `--ground_mode off` 与 LeIsaac 单相机 GUI 性能基本对齐。
+- 默认 `--ground_mode off` 与 `--teleop_render_interval 2` 用于提高单相机遥操作控制频率。
 
 性能数据：
 
@@ -156,6 +156,16 @@ Ctrl+C 或关闭窗口退出
 | LWH 原双相机 | on | 20.56 | 19.05 / 21.12 |
 | LWH 优化后单相机 | off | 32.16 | 28.51 / 34.38 |
 | LWH 优化后双相机 | off | 25.68 | 23.47 / 26.81 |
+
+后续高频遥操作验证补充：
+
+| Case | Camera | render_interval | Wall loop Hz | Control segment Hz |
+| --- | --- | ---: | ---: | --- |
+| LWH 高频遥操作默认路径 | front | 2 | 46.11 | 43.30 / 58.56 |
+| LWH 高频遥操作 | front + wrist | 2 | 33.80 | 32.58 / 37.60 |
+
+判断：单相机可以作为接近 60 Hz 控制、30 Hz 图像的默认采集基线；双相机 GUI
+遥操作仍明显受两路 TiledCamera 和 viewport 同步影响，不作为第一版默认采集基线。
 
 记录：
 

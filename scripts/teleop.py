@@ -31,9 +31,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
     parser.add_argument(
         "--camera_mode",
-        default="dual",
+        default="front",
         choices=["front", "dual"],
-        help="Camera set for simulation observations. front disables wrist; dual enables front+wrist.",
+        help="Camera set for simulation observations. front is the high-frequency teleop baseline; dual enables front+wrist.",
     )
     parser.add_argument(
         "--ground_mode",
@@ -44,8 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--teleop_render_interval",
         type=int,
-        default=1,
-        help="Physics steps per render. LeIsaac LiftCube keeps the IsaacLab default 1.",
+        default=2,
+        help="Physics steps per render. Default 2 targets 60 Hz control with 30 Hz camera/render updates.",
     )
     parser.add_argument(
         "--teleop_antialiasing_mode",
@@ -169,14 +169,15 @@ class RateLimiter:
         self._render_period = min(0.0166, self._period)
         self._next_step = time.perf_counter()
 
-    def sleep(self, env) -> None:
+    def sleep(self, env, *, render_during_wait: bool) -> None:
         self._next_step += self._period
         while simulation_app.is_running():
             remaining = self._next_step - time.perf_counter()
             if remaining <= 0.0:
                 break
             time.sleep(min(self._render_period, remaining))
-            env.sim.render()
+            if render_during_wait:
+                env.sim.render()
 
         if self._next_step < time.perf_counter() - self._period:
             self._next_step = time.perf_counter()
@@ -285,6 +286,7 @@ def main() -> None:
 
         while simulation_app.is_running() and not interrupted:
             loop_iterations += 1
+            render_during_wait = False
             if loop_iterations in validation_events:
                 event_type, key = validation_events[loop_iterations]
                 validation_provider.buffer_keyboard_key_event(validation_keyboard, event_type, key, 0)
@@ -324,6 +326,7 @@ def main() -> None:
                     reset_outcomes.append(outcome)
                     pending_reset = None
                     action_was_active = False
+                    render_during_wait = True
                     print(
                         f"LWH_TELEOP_RESET outcome={outcome} count={reset_count} "
                         f"max_joint_delta_rad={episode_max_joint_delta:.6f}",
@@ -334,6 +337,7 @@ def main() -> None:
                 elif action is None:
                     # B 之前仍需渲染，Omniverse 才能持续派发键盘事件。
                     env.sim.render()
+                    render_during_wait = True
                 else:
                     if not action_was_active and bool(torch.any(torch.abs(action) > 1.0e-7)):
                         action_was_active = True
@@ -349,7 +353,7 @@ def main() -> None:
                     episode_max_joint_delta = max(episode_max_joint_delta, joint_delta)
                     max_joint_delta = max(max_joint_delta, joint_delta)
 
-            rate_limiter.sleep(env)
+            rate_limiter.sleep(env, render_during_wait=render_during_wait)
 
             if VALIDATION_MODE and loop_iterations >= validation_stop_frame:
                 print("LWH_TELEOP_VALIDATION_SEQUENCE_COMPLETE", flush=True)

@@ -154,22 +154,23 @@
 - 如果需要完整地面，可以显式 `--ground_mode on`。
 - Stage 1 任务配置仍可验证 ground 存在；Stage 2 入口按性能需要运行时移除。
 
-## 2026-08-09：保留 `render_interval=1`
+## 2026-08-10：Stage 2 teleop 默认改为 `render_interval=2`
 
 决策：
 
-- 默认 `render_interval=1`，即 60Hz rendering step。
-- 只在卡顿时建议用户尝试 `--teleop_render_interval 2`。
+- 默认 `render_interval=2`，即 60 Hz 控制目标配 30 Hz 图像/渲染更新。
+- 主动控制时，限速等待阶段不再额外调用完整 `env.sim.render()`；等待 B 开始或 reset 后仍渲染，以保证窗口和键盘事件可用。
 
 原因：
 
-- LeIsaac 默认是 `render_interval=1`。
-- 遥操作需要窗口事件及时处理，过早降低 render 频率可能影响手感。
+- 实测表明 Stage 1 纯环境 headless 单相机可超过 60 Hz，瓶颈主要来自 GUI/viewport/相机同步。
+- 旧循环在 `RateLimiter.sleep()` 中额外渲染，会抵消 `render_interval=2` 的收益。
+- VLA/ACT 数据更需要清晰稳定的 30 FPS 图像、可靠 timestamp 和动作对齐，而不是 60 FPS 图像。
 
 影响：
 
-- 默认先追求操作反馈一致性。
-- 双相机或低性能场景可以手动增加 render interval。
+- 单相机遥操作成为默认高频采集基线，目标是接近 60 Hz 控制、30 Hz 图像。
+- 双相机 GUI 遥操作仍明显更重，不承诺 60 Hz 控制；需要双相机时应记录真实 timestamp，并在 LeRobot 转换阶段统一重采样。
 
 ## 2026-08-09：Stage 3 优先 HDF5，再转 LeRobotDataset
 

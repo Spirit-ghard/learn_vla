@@ -39,7 +39,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 
 - Stage 1：`Lwh-SO101-Table-v0` SO101 桌面方块任务。
 - Stage 2：键盘遥操作。
-- Stage 2.2：单/双相机可选，teleop 默认关闭额外 ground 以对齐 LeIsaac GUI 性能。
+- Stage 2.2：单/双相机可选，teleop 默认关闭额外 ground，并使用 30 Hz 渲染口径提升遥操作控制频率。
 
 ## 当前可用命令
 
@@ -73,6 +73,8 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode f
 - 本项目单相机 `ground_mode=off`：约 `32.16 Hz` wall loop。
 - 本项目双相机 `ground_mode=off`：约 `25.68 Hz` wall loop。
 - 本项目低于 LeIsaac 的主要原因曾是额外 20m ground plane，不是相机位姿。
+- 进一步改为默认 `render_interval=2` 后，单相机验证控制段最高约 `59.15 Hz`，图像/渲染为 `30 Hz`。
+- 双相机 GUI 仍只有三十多 Hz 控制段，不建议作为第一版默认录制配置。
 
 详细报告：
 

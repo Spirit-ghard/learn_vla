@@ -1,6 +1,6 @@
 # LWH Robot Learning
 
-当前分支是 `stage_2_2`：在第二阶段键盘遥操作基础上，提供单相机/双相机可选运行。
+当前分支是 `stage_2_2`：在第二阶段键盘遥操作基础上，提供单相机高频默认遥操作和双相机可选运行。
 
 ## 后续开发上下文
 
@@ -19,6 +19,7 @@
 - `front` 和 `wrist` 相机位置使用本项目之前自定义的位姿。
 - 默认不强制 `quality + FXAA`，先使用 IsaacLab/LeIsaac 默认渲染路径。
 - 遥操作默认关闭额外 ground plane，对齐 LeIsaac 桌面任务的 GUI 性能；任务配置本身仍保留 ground。
+- 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
 
 项目只运行 IsaacLab 仿真，不连接真实机器人，不启动 ROS，不访问串口。
 
@@ -31,13 +32,13 @@ cd /home/a/lwh_code/lwh_robot_learning
 git checkout stage_2_2
 ```
 
-启动键盘遥操作，默认双相机：
+启动键盘遥操作，默认单相机高频配置：
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1
 ```
 
-只启用前视相机：
+显式只启用前视相机：
 
 ```bash
 python3 scripts/teleop.py \
@@ -77,7 +78,8 @@ wrist camera: 可选，640 x 480, 30 FPS, 本项目原 wrist 位姿
 ground plane: teleop 默认关闭，可通过 --ground_mode on 恢复
 control loop: 60 Hz
 sim dt: 1 / 60 s
-render_interval: 1
+render_interval: 2
+camera/render target: 30 Hz
 render preset: IsaacLab default
 anti-aliasing: IsaacLab default
 ```
@@ -113,13 +115,13 @@ python3 scripts/teleop.py \
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode front
 ```
 
-如果单相机流畅，再切回双相机：
+如果单相机流畅，再显式切回双相机：
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual
 ```
 
-如果双相机仍卡顿，但你需要保留双相机数据，可以先降低窗口刷新压力：
+如果双相机仍卡顿，但你需要保留双相机数据，可以先明确使用默认的 30 Hz 渲染口径：
 
 ```bash
 python3 scripts/teleop.py \
@@ -130,6 +132,6 @@ python3 scripts/teleop.py \
 ```
 
 `--quality` 只用于确认画质问题，不建议作为默认录制配置；它会切到更重的渲染 preset。
-当前阶段建议数据底线是每路相机 `640 x 480 @ 30 FPS`、动作控制 `60 Hz`、只记录 RGB 图像和关节状态。
+当前阶段建议数据底线是每路相机 `640 x 480 @ 30 FPS`、单相机遥操作尽量接近 `60 Hz` 控制、只记录 RGB 图像和关节状态。双相机 GUI 遥操作会明显更重，第一版数据采集优先使用单相机。
 
 GUI 性能对比记录见 [stage2_gui_performance_report.md](docs/stage2_gui_performance_report.md)。
