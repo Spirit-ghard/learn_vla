@@ -13,7 +13,7 @@
 - 渲染：Isaac/Kit 默认，实际为 `DLSS balanced`，`render_interval=1`。
 - 输入：通过 Carb keyboard event 注入同一组 `B/D/R/U/N` 事件。
 - 循环：180 次 GUI loop，期间等待时调用 `env.sim.render()`。
-- 不连接真实机器人，不访问串口。
+- 本性能测试不连接真实设备，不访问串口。
 
 ## 对比结果
 

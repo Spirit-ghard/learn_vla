@@ -30,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
     parser.add_argument(
+        "--teleop_device",
+        default="keyboard",
+        choices=["keyboard", "so101leader"],
+        help="Teleoperation input device. so101leader reads a real leader arm and only drives simulation.",
+    )
+    parser.add_argument(
         "--camera_mode",
         default="front",
         choices=["front", "dual"],
@@ -64,6 +70,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Match LeIsaac --quality: set FXAA and the quality rendering preset.",
     )
+    parser.add_argument(
+        "--leader_port",
+        default="/dev/ttyACM0",
+        help="Serial port for --teleop_device so101leader.",
+    )
+    parser.add_argument(
+        "--leader_calibration",
+        default=None,
+        help="SO101 leader calibration JSON. Defaults to LWH_SO101_LEADER_CALIBRATION, LeRobot, then LeIsaac cache.",
+    )
+    parser.add_argument(
+        "--leader_id",
+        default=None,
+        help="Optional LeRobot leader id used to find ~/.cache/huggingface calibration.",
+    )
+    parser.add_argument(
+        "--leader_start_immediately",
+        action="store_true",
+        help="Start SO101 leader control immediately instead of waiting for B.",
+    )
+    parser.add_argument(
+        "--leader_keep_torque",
+        action="store_true",
+        help="Do not disable leader arm torque on connect. Default disables torque for safe passive input.",
+    )
+    parser.add_argument(
+        "--leader_skip_handshake",
+        action="store_true",
+        help="Skip ping checks for leader motors before reading positions.",
+    )
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
     if args.headless:
@@ -84,7 +120,7 @@ import torch  # noqa: E402
 
 import lwh_isaaclab_tasks  # noqa: E402,F401  # 导入后注册自定义 task id。
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from lwh_isaaclab_tasks.devices import SO101Keyboard  # noqa: E402
+from lwh_isaaclab_tasks.devices import SO101Keyboard, SO101LeaderArm, resolve_leader_calibration_path  # noqa: E402
 
 
 def delete_attribute(obj, attr_name: str) -> None:
@@ -194,7 +230,7 @@ def main() -> None:
         (VALIDATION_OUTPUT_DIR / "failure.txt").unlink(missing_ok=True)
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    env_cfg.use_teleop_device("keyboard")
+    env_cfg.use_teleop_device(args_cli.teleop_device)
     env_cfg.recorders = None
     if args_cli.camera_mode == "front":
         delete_attribute(env_cfg.scene, "wrist")
@@ -218,7 +254,25 @@ def main() -> None:
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     render_config = read_render_config(env)
-    teleop = SO101Keyboard(env)
+    if args_cli.teleop_device == "keyboard":
+        teleop = SO101Keyboard(env)
+    elif args_cli.teleop_device == "so101leader":
+        calibration_path = resolve_leader_calibration_path(args_cli.leader_calibration, args_cli.leader_id)
+        teleop = SO101LeaderArm(
+            env,
+            port=args_cli.leader_port,
+            calibration_path=calibration_path,
+            start_immediately=args_cli.leader_start_immediately,
+            disable_torque_on_connect=not args_cli.leader_keep_torque,
+            handshake=not args_cli.leader_skip_handshake,
+        )
+        print(
+            f"LWH_SO101_LEADER_CONNECTED port={args_cli.leader_port} calibration={calibration_path} "
+            f"torque_disabled={not args_cli.leader_keep_torque}",
+            flush=True,
+        )
+    else:
+        raise ValueError(f"Unsupported teleop device: {args_cli.teleop_device}")
     pending_reset: str | None = None
     interrupted = False
 
@@ -271,7 +325,8 @@ def main() -> None:
         episode_initial_joint_pos = robot.data.joint_pos.clone()
         print(
             f"LWH_TELEOP_READY task={args_cli.task} num_envs={env.num_envs} "
-            f"camera_mode={args_cli.camera_mode} ground_mode={args_cli.ground_mode} control_hz=60.0",
+            f"teleop_device={args_cli.teleop_device} camera_mode={args_cli.camera_mode} "
+            f"ground_mode={args_cli.ground_mode} control_hz=60.0",
             flush=True,
         )
         print(
@@ -422,6 +477,8 @@ def main() -> None:
             write_process_status("passed")
     finally:
         signal.signal(signal.SIGINT, previous_sigint_handler)
+        if hasattr(teleop, "disconnect"):
+            teleop.disconnect()
         env.close()
 
     print(

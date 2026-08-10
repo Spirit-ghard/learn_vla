@@ -13,20 +13,21 @@
 当前分支：
 
 ```text
-stage_2_2
+stage_2_3
 ```
 
 最新提交：
 
 ```text
-665a38e stage 2.2: align teleop ground profile with LeIsaac
+stage 2.3: add SO101 leader teleoperation
 ```
 
 当前主线：
 
 ```text
-main -> 665a38e
-stage_2_2 -> 665a38e
+main: 暂未更新到本地最新阶段分支
+stage_2_2: 键盘遥操作封存版
+stage_2_3: 当前最新，真实 SO101 Leader 输入
 ```
 
 当前远端：
@@ -40,6 +41,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 - Stage 1：`Lwh-SO101-Table-v0` SO101 桌面方块任务。
 - Stage 2：键盘遥操作。
 - Stage 2.2：单/双相机可选，teleop 默认关闭额外 ground，并使用 30 Hz 渲染口径提升遥操作控制频率。
+- Stage 2.3：新增真实 SO101 Leader 串口输入，只控制 IsaacLab 仿真 follower。
 
 ## 当前可用命令
 
@@ -59,6 +61,18 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode f
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual
+```
+
+真实 SO101 Leader 控制仿真：
+
+```bash
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0
+```
+
+启动后立即跟随 leader：
+
+```bash
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --leader_start_immediately
 ```
 
 完整 ground：
@@ -89,14 +103,14 @@ docs/stage2_gui_performance_report.md
 建议创建分支：
 
 ```bash
-git checkout stage_2_2
+git checkout stage_2_3
 git checkout -b stage_3
 ```
 
 Stage 3 最小目标：
 
 - 新增独立 Python 入口，例如 `scripts/record_hdf5.py`。
-- 复用 `SO101Keyboard` 和 `teleop.py` 的任务创建/相机/ground 配置逻辑。
+- 复用 `SO101Keyboard`、`SO101LeaderArm` 和 `teleop.py` 的任务创建/相机/ground 配置逻辑。
 - 写 HDF5，不直接依赖 LeRobot。
 - 记录 state、front image、可选 wrist image、action、timestamp、episode_index、frame_index、task。
 - 明确 episode 生命周期：`B` 开始，`R` 失败结束，`N` 成功结束，reset 下一集。
@@ -107,13 +121,14 @@ Stage 3 最小目标：
 如果上下文不足，新对话直接给助手这句话：
 
 ```text
-先阅读 /home/a/lwh_code/lwh_robot_learning/AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md，再继续 Stage 3 数据录制。不要控制真实机器人，不要直接 import LeIsaac。
+先阅读 /home/a/lwh_code/lwh_robot_learning/AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md，再继续 Stage 3 数据录制。不要控制真实 follower，不要直接 import LeIsaac 或 LeRobot 到 Isaac 进程。
 ```
 
 ## 注意事项
 
 - 不要直接从 LeIsaac import 任务、模板或设备。
-- 不要启动 ROS 或串口。
+- 不要启动 ROS。
+- 只有 `--teleop_device so101leader` 可以读取真实 leader 串口；不得控制真实 follower。
 - 不要新增 shell 启动脚本。
 - 每次实现一个阶段，完成验证后再进入下一阶段。
 - 内部验证产物不要保留在仓库里。

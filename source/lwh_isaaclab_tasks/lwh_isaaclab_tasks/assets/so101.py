@@ -9,19 +9,12 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
+from .so101_constants import SO101_JOINT_NAMES
+
 
 DEFAULT_SIM_ASSETS_ROOT = Path("/home/a/.local/share/ov/pkg/leisaac/assets")
 SIM_ASSETS_ENV = "LWH_SIM_ASSETS_ROOT"
 LEGACY_ASSETS_ENV = "LEISAAC_ASSETS_ROOT"
-
-SO101_JOINT_NAMES = [
-    "shoulder_pan",
-    "shoulder_lift",
-    "elbow_flex",
-    "wrist_flex",
-    "wrist_roll",
-    "gripper",
-]
 
 
 def _resolve_assets_root() -> Path:

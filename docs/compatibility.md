@@ -11,6 +11,7 @@
 | IsaacLab Python package | 0.41.3 |
 | IsaacLab Tasks | 0.10.36 |
 | LeIsaac | 0.4.0, `24d3bcd3f1e4585740fc79921782c41617237812` |
+| LeRobot local source | 0.5.1, `/home/a/lerobot_05`, `2ea20910` |
 | Python | 3.10.20 |
 | PyTorch | 2.5.1+cu124 |
 | Gymnasium | 1.2.0 |
@@ -21,6 +22,11 @@
 LeIsaac 官方兼容矩阵将 Isaac Sim 4.5 与 IsaacLab v2.1.1、Python 3.10、
 PyTorch 2.5.1 配套。本项目按该组合锁定。LeIsaac 只作为源码参考和 SO101 USD
 资产来源，项目运行时不导入 `leisaac` Python 包。
+
+本机 LeRobot 源码 `/home/a/lerobot_05` 的 `pyproject.toml` 标记版本为 `0.5.1`，
+并要求 Python `>=3.12`。Isaac Sim 4.5 / IsaacLab 当前运行环境是 Python `3.10.20`，
+因此 stage2_3 不把 LeRobot 0.5.1 直接导入 Isaac 进程；真实 SO101 Leader
+读取逻辑按 LeRobot/LeIsaac 源码格式用 `scservo_sdk` 重写最小串口 reader。
 
 ## Python-only 运行入口
 
@@ -54,7 +60,7 @@ PyTorch 2.5.1 配套。本项目按该组合锁定。LeIsaac 只作为源码参�
 
 ## SO101 契约
 
-仿真关节顺序与 `/home/a/lwh_code/soarm_ros` 一致：
+仿真关节顺序与 `/home/a/lwh_code/soarm_ros` 和 LeIsaac SO101 配置一致：
 
 ```text
 shoulder_pan
@@ -66,4 +72,5 @@ gripper
 ```
 
 仿真使用本机资产目录中的 `so101_follower.usd` 作为模型和关节限位真值。
-ROS 工程只用于名称交叉检查；本项目不导入 ROS，不打开串口，不控制真实机器人。
+ROS 工程只用于名称交叉检查；本项目不导入 ROS，不控制真实 follower。
+stage2_3 只有在 `--teleop_device so101leader` 时打开 leader 串口读取位置。

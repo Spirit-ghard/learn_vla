@@ -38,11 +38,12 @@
 - 该函数自动切换到 `/home/a/anaconda3/envs/lwh_isaac/bin/python`。
 - 验证脚本可通过 supervisor 模式得到可靠退出码。
 
-## 2026-08-08：不控制真实机器人
+## 2026-08-08：不控制真实 follower
 
 决策：
 
-- 本项目只做仿真，不控制真实 SO101。
+- 本项目只做仿真，不控制真实 SO101 follower。
+- Stage 2.3 允许显式读取真实 SO101 Leader 作为输入设备，但动作只发送给 IsaacLab 仿真环境。
 
 原因：
 
@@ -52,8 +53,9 @@
 影响：
 
 - 不启动 ROS。
-- 不访问 `/dev/tty*`。
-- 不使用 LeRobot real robot API。
+- 默认键盘仿真不访问 `/dev/tty*`。
+- `--teleop_device so101leader` 只读取 leader 串口位置，不控制真实 follower。
+- 不使用 LeRobot real robot API 控制真实机器人。
 - `/home/a/lwh_code/soarm_ros` 只作为名称和历史信息参考。
 
 ## 2026-08-08：Stage 1 使用 ManagerBasedRLEnvCfg 组合任务
@@ -113,7 +115,7 @@
 决策：
 
 - `scripts/teleop.py` 新增 `--camera_mode front|dual`。
-- 默认值为 `dual`，但性能基线建议用 `front`。
+- 默认值为 `front`，`dual` 作为显式可选项。
 
 原因：
 
@@ -124,6 +126,28 @@
 
 - `front` 模式运行时删除 `wrist` scene asset 和 observation term。
 - `dual` 模式保留 `front + wrist`，但当前机器 GUI 吞吐低于单相机。
+
+## 2026-08-10：Stage 2.3 新增真实 SO101 Leader 输入
+
+决策：
+
+- 新增 `SO101LeaderArm` 和最小 `SO101LeaderBus`，通过 Feetech/STS3215 串口读取真实 leader 位置。
+- `--teleop_device so101leader` 时，任务动作空间切换为 6D `JointPositionActionCfg`。
+- Leader 归一化读数映射到仿真 SO101 follower 的关节角范围。
+- 运行时不 import `leisaac`，也不 import LeRobot。
+
+原因：
+
+- 用户已经跑通 LeIsaac 的真实 leader 控制仿真流程，希望本项目按 IsaacLab 基础重写。
+- LeIsaac 可作为源码参考，但用户明确要求不能直接从 LeIsaac 库引用。
+- 本机 LeRobot 源码为 `0.5.1`，要求 Python `>=3.12`；Isaac Sim 4.5 / IsaacLab 当前环境是 Python `3.10.20`，不能直接把 LeRobot 0.5.1 导入 Isaac 进程。
+
+影响：
+
+- Leader 串口读取使用 `scservo_sdk` 的 `GroupSyncRead(Present_Position)`。
+- 默认校准路径查找顺序：`--leader_calibration`、`LWH_SO101_LEADER_CALIBRATION`、LeRobot cache、LeIsaac cache。
+- 默认连接时关闭 leader 扭矩，让 leader 作为被动输入设备；可用 `--leader_keep_torque` 禁止该写入。
+- 该模式仍不控制真实 follower，不启动 ROS，不访问 `/home/a/lwh_code/soarm_ros`。
 
 ## 2026-08-09：Stage 2 teleop 默认关闭额外 ground plane
 

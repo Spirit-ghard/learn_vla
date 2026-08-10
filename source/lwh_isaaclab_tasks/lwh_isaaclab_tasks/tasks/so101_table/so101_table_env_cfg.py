@@ -20,6 +20,7 @@ from isaaclab.sensors import FrameTransformerCfg, OffsetCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 
 from lwh_isaaclab_tasks.assets import SO101_FOLLOWER_CFG, SO101_JOINT_NAMES
+from lwh_isaaclab_tasks.devices.so101_leader import normalized_positions_to_sim_radians
 
 from . import mdp
 
@@ -225,10 +226,24 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
         self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SO101_JOINT_NAMES]
 
     def use_teleop_device(self, teleop_device: str) -> None:
-        """按设备填充动作空间；当前阶段只支持仿真键盘。"""
-        if teleop_device != "keyboard":
+        """按设备填充动作空间；键盘走 IK，真实 SO101 Leader 走关节位置。"""
+        if teleop_device not in ("keyboard", "so101leader"):
             raise ValueError(f"Unsupported teleop device for this task: {teleop_device}")
         self.task_type = teleop_device
+        if teleop_device == "so101leader":
+            self.actions.arm_action = mdp.JointPositionActionCfg(
+                asset_name="robot",
+                joint_names=["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
+                scale=1.0,
+            )
+            self.actions.gripper_action = mdp.JointPositionActionCfg(
+                asset_name="robot",
+                joint_names=["gripper"],
+                scale=1.0,
+            )
+            self.scene.robot.spawn.rigid_props.disable_gravity = True
+            return
+
         self.actions.arm_action = mdp.DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=["shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
@@ -248,7 +263,13 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.robot.spawn.rigid_props.disable_gravity = True
 
     def preprocess_device_action(self, action: dict[str, Any], teleop_device) -> torch.Tensor:
-        """将键盘设备的 8 维增量动作整理成 IsaacLab action tensor。"""
+        """将遥操作设备动作整理成 IsaacLab action tensor。"""
+        if action.get("so101leader") is not None:
+            joint_state = normalized_positions_to_sim_radians(action["joint_state"])
+            return torch.as_tensor(joint_state, device=teleop_device.env.device, dtype=torch.float32).repeat(
+                teleop_device.env.num_envs,
+                1,
+            )
         if action.get("keyboard") is None:
             raise NotImplementedError(f"Unsupported device action: {teleop_device.device_type}")
         joint_state = torch.as_tensor(action["joint_state"], device=teleop_device.env.device, dtype=torch.float32)

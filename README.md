@@ -1,6 +1,6 @@
 # LWH Robot Learning
 
-当前分支是 `stage_2_2`：在第二阶段键盘遥操作基础上，提供单相机高频默认遥操作和双相机可选运行。
+当前分支是 `stage_2_3`：在第二阶段键盘遥操作基础上，新增真实 SO101 Leader 作为仿真遥操作输入。
 
 ## 后续开发上下文
 
@@ -20,8 +20,10 @@
 - 默认不强制 `quality + FXAA`，先使用 IsaacLab/LeIsaac 默认渲染路径。
 - 遥操作默认关闭额外 ground plane，对齐 LeIsaac 桌面任务的 GUI 性能；任务配置本身仍保留 ground。
 - 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
+- `--teleop_device so101leader` 只读取真实 leader 串口位置并驱动仿真 follower，不控制真实 follower。
 
-项目只运行 IsaacLab 仿真，不连接真实机器人，不启动 ROS，不访问串口。
+项目只运行 IsaacLab 仿真，不启动 ROS，不控制真实机器人。stage2_3 允许在显式选择
+`so101leader` 时访问真实 leader 串口作为输入设备。
 
 ## 使用方式
 
@@ -29,13 +31,45 @@
 
 ```bash
 cd /home/a/lwh_code/lwh_robot_learning
-git checkout stage_2_2
+git checkout stage_2_3
 ```
 
 启动键盘遥操作，默认单相机高频配置：
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1
+```
+
+启动真实 SO101 Leader 控制仿真：
+
+```bash
+python3 scripts/teleop.py \
+  --task Lwh-SO101-Table-v0 \
+  --num_envs 1 \
+  --teleop_device so101leader \
+  --leader_port /dev/ttyACM0
+```
+
+Leader 模式默认按 `B` 后开始控制。如果希望启动后立即跟随 leader：
+
+```bash
+python3 scripts/teleop.py \
+  --task Lwh-SO101-Table-v0 \
+  --num_envs 1 \
+  --teleop_device so101leader \
+  --leader_port /dev/ttyACM0 \
+  --leader_start_immediately
+```
+
+如果要指定校准文件：
+
+```bash
+python3 scripts/teleop.py \
+  --task Lwh-SO101-Table-v0 \
+  --num_envs 1 \
+  --teleop_device so101leader \
+  --leader_port /dev/ttyACM0 \
+  --leader_calibration /path/to/so101_leader.json
 ```
 
 显式只启用前视相机：
@@ -70,6 +104,15 @@ N 成功并重置
 Ctrl+C 或关闭窗口退出
 ```
 
+Leader 模式按键：
+
+```text
+B 开始跟随真实 leader
+R 失败并重置
+N 成功并重置
+Ctrl+C 或关闭窗口退出
+```
+
 ## 当前配置
 
 ```text
@@ -82,6 +125,8 @@ render_interval: 2
 camera/render target: 30 Hz
 render preset: IsaacLab default
 anti-aliasing: IsaacLab default
+keyboard action: 8D delta IK + relative pan/gripper
+so101leader action: 6D joint position
 ```
 
 如果默认画面不够清楚，再启用 LeIsaac 同款质量开关：
@@ -96,6 +141,17 @@ python3 scripts/teleop.py \
 
 如果双相机默认配置开始卡顿，先用 `--camera_mode front` 确认遥操作手感，再决定录制阶段
 是否需要双相机。
+
+Leader 串口相关参数：
+
+```text
+--leader_port             leader 串口，默认 /dev/ttyACM0
+--leader_calibration      显式校准 JSON；不传时优先环境变量、LeRobot cache、LeIsaac cache
+--leader_id               用于查找 LeRobot cache 下的校准文件
+--leader_start_immediately 启动后不等 B，直接跟随 leader
+--leader_keep_torque      不在连接时关闭 leader 扭矩
+--leader_skip_handshake   跳过电机 ping 检查
+```
 
 如果需要查看完整地面：
 

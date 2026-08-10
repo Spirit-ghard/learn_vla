@@ -6,11 +6,12 @@
 
 | 分支 | 作用 | 当前说明 |
 | --- | --- | --- |
-| `main` | 当前主线 | 指向 `stage_2_2` 最新提交 |
+| `main` | 远端主线 | 暂未更新到本地最新阶段分支 |
 | `stage_1` | 第一阶段最小场景 | 已完成 |
 | `stage_2` | 第二阶段单相机 LeIsaac 风格基线 | 已完成，过程版本 |
 | `stage_2_1` | 第二阶段过程版本 | 已完成，过程版本 |
-| `stage_2_2` | 第二阶段当前最新 | 已完成，支持单/双相机和 ground 性能 profile |
+| `stage_2_2` | 第二阶段键盘遥操作封存版 | 已完成，支持单/双相机和 ground 性能 profile |
+| `stage_2_3` | 第二阶段当前最新 | 已完成，新增真实 SO101 Leader 输入控制仿真 |
 
 已删除本地历史分支：
 
@@ -74,14 +75,15 @@ docs/stage1_validation.md
 docs/compatibility.md
 ```
 
-## Stage 2：键盘遥操作
+## Stage 2：遥操作
 
 状态：已完成。
 
 对应分支：
 
 ```text
-stage_2_2
+stage_2_2: 键盘遥操作封存版
+stage_2_3: 当前版本，新增真实 SO101 Leader 输入
 ```
 
 目标：
@@ -90,9 +92,10 @@ stage_2_2
 - 参数保留核心任务选择和环境数量，并支持性能调试项。
 - 使用 `AppLauncher` 启动 Isaac Sim。
 - 导入任务注册模块。
-- `parse_env_cfg(task)` 后调用 `env_cfg.use_teleop_device("keyboard")`。
+- `parse_env_cfg(task)` 后按 `--teleop_device` 调用 `env_cfg.use_teleop_device(...)`。
 - `gym.make(task, cfg=env_cfg).unwrapped` 创建环境。
 - `SO101Keyboard(env)` 使用 Carb/Omniverse 键盘事件回调。
+- `SO101LeaderArm(env)` 读取真实 SO101 Leader 关节位置，只驱动仿真 follower。
 - 主循环执行 `teleop.advance()`、`env.step(action)` 和等待时 `env.sim.render()`。
 
 关键文件：
@@ -100,13 +103,16 @@ stage_2_2
 ```text
 scripts/teleop.py
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/devices/so101_keyboard.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/devices/so101_leader.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/so101_constants.py
 ```
 
 正式启动：
 
 ```bash
-python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode front
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0
 ```
 
 关键参数：
@@ -115,12 +121,19 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode d
 | --- | --- | --- |
 | `--task` | `Lwh-SO101-Table-v0` | Gym task id |
 | `--num_envs` | `1` | 仿真环境数量，键盘遥操作建议 1 |
+| `--teleop_device` | `keyboard` | `keyboard` 使用 Carb 键盘；`so101leader` 读取真实 leader 串口控制仿真 |
 | `--camera_mode` | `front` | `front` 只保留前视并作为高频遥操作基线；`dual` 保留 front+wrist |
 | `--ground_mode` | `off` | teleop 默认移除额外 ground，对齐 LeIsaac GUI 性能 |
 | `--teleop_render_interval` | `2` | 每多少个 physics step 渲染一次；默认目标为 60 Hz 控制、30 Hz 图像/渲染 |
 | `--teleop_antialiasing_mode` | unset | 可选覆盖 AA |
 | `--teleop_rendering_mode` | unset | 可选覆盖 rendering preset |
 | `--quality` | false | 对齐 LeIsaac `--quality`，启用 `FXAA + quality` |
+| `--leader_port` | `/dev/ttyACM0` | SO101 Leader 串口，只在 `so101leader` 模式使用 |
+| `--leader_calibration` | unset | 显式 leader 校准 JSON；不传时查环境变量、LeRobot cache、LeIsaac cache |
+| `--leader_id` | unset | 用于查找 LeRobot cache 下的校准文件 |
+| `--leader_start_immediately` | false | 不等待 B，启动后直接跟随 leader |
+| `--leader_keep_torque` | false | 不在连接时关闭 leader 扭矩 |
+| `--leader_skip_handshake` | false | 跳过电机 ping 检查 |
 
 按键：
 
@@ -136,6 +149,15 @@ N 成功并重置
 Ctrl+C 或关闭窗口退出
 ```
 
+Leader 模式按键：
+
+```text
+B 开始跟随真实 leader
+R 失败并重置
+N 成功并重置
+Ctrl+C 或关闭窗口退出
+```
+
 验证过的内容：
 
 - GUI 可创建窗口并处理 Carb 键盘事件。
@@ -146,6 +168,9 @@ Ctrl+C 或关闭窗口退出
 - 单相机和双相机模式均可创建、step、出图。
 - `--ground_mode on` 可恢复完整 ground 并正常运行。
 - 默认 `--ground_mode off` 与 `--teleop_render_interval 2` 用于提高单相机遥操作控制频率。
+- `/dev/ttyACM0` 上真实 SO101 Leader 可握手 6 个 STS3215 电机并读取校准后位置。
+- `--teleop_device so101leader` 可创建仿真环境，动作空间为 6D joint position，并持续驱动仿真 SO101 follower。
+- Leader 模式只读取真实 leader 作为输入，不控制真实 follower，不启动 ROS。
 
 性能数据：
 
@@ -178,10 +203,10 @@ docs/stage2_gui_performance_report.md
 
 状态：未开始。
 
-建议从 `stage_2_2` 新建分支：
+建议从 `stage_2_3` 新建分支：
 
 ```bash
-git checkout stage_2_2
+git checkout stage_2_3
 git checkout -b stage_3
 ```
 
@@ -226,7 +251,7 @@ Ctrl+C: 安全关闭文件
 - episode 数量、frame 数量、success 标记正确。
 - 每帧 state/action/timestamp/image 对齐。
 - 图像非空白，shape 符合 `640 x 480 x 3`。
-- 不连接真实机器人。
+- 不控制真实机器人；如需 leader 输入，只读取 leader 串口。
 
 ## Stage 4：数据回放
 

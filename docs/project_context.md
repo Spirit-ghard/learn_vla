@@ -4,7 +4,7 @@
 
 ## 总目标
 
-基于 IsaacLab 搭建一套只面向仿真的机器人学习流程，参考 LeIsaac 的任务组织方式，并使用 LeRobot 完成数据训练。当前不考虑真实机器人。
+基于 IsaacLab 搭建一套只面向仿真的机器人学习流程，参考 LeIsaac 的任务组织方式，并使用 LeRobot 完成数据训练。当前不部署或控制真实机器人；stage2_3 只允许读取真实 SO101 Leader 作为仿真输入设备。
 
 最终目标流程：
 
@@ -33,16 +33,16 @@ Lwh-SO101-Table-v0
 当前最新分支：
 
 ```text
-stage_2_2
+stage_2_3
 ```
 
 当前最新提交：
 
 ```text
-665a38e stage 2.2: align teleop ground profile with LeIsaac
+stage 2.3: add SO101 leader teleoperation
 ```
 
-`main` 当前也指向该提交。
+`main` 暂未更新到本地最新阶段分支。
 
 当前远端：
 
@@ -52,11 +52,12 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 
 ## 重要限制
 
-- 不控制真实机器人。
+- 不控制真实 follower。
 - 不启动 ROS。
-- 不访问串口。
+- 默认键盘仿真不访问串口；只有 `--teleop_device so101leader` 显式读取真实 leader 串口。
 - 不把 `/home/a/lwh_code/soarm_ros` 注入运行时。
 - 不直接 import `leisaac` Python 包。
+- 不直接 import LeRobot 到 Isaac 进程。
 - 不新增 shell 启动脚本。
 
 ## 代码结构
@@ -72,9 +73,11 @@ scripts/
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/
   __init__.py
   assets/
+    so101_constants.py
     so101.py
   devices/
     so101_keyboard.py
+    so101_leader.py
   tasks/
     __init__.py
     so101_table/
@@ -185,7 +188,7 @@ wrist_roll
 gripper
 ```
 
-动作维度：`8`
+键盘动作维度：`8`
 
 键盘遥操作下动作含义：
 
@@ -205,6 +208,13 @@ gripper
 - `DifferentialInverseKinematicsActionCfg` 控制 `shoulder_lift/elbow_flex/wrist_flex/wrist_roll`
 - `RelativeJointPositionActionCfg` 控制 `shoulder_pan/gripper`
 - 禁用机器人刚体重力，减少 IK 键盘模式下的抖动
+
+`use_teleop_device("so101leader")` 会配置：
+
+- `JointPositionActionCfg` 控制 `shoulder_pan/shoulder_lift/elbow_flex/wrist_flex/wrist_roll`
+- `JointPositionActionCfg` 控制 `gripper`
+- 动作维度为 `6`
+- 真实 leader 位置按 LeRobot/LeIsaac 校准格式归一化，再映射到仿真 follower 关节角范围
 
 ## 相机配置
 
@@ -269,6 +279,18 @@ Stage 2 双相机遥操作：
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual
 ```
 
+Stage 2.3 真实 SO101 Leader 控制仿真：
+
+```bash
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0
+```
+
+启动后立即跟随 leader：
+
+```bash
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --leader_start_immediately
+```
+
 恢复完整 ground：
 
 ```bash
@@ -284,6 +306,15 @@ A/D 左右
 Q/E 上下
 I/K/J/L 旋转
 U/O 夹爪
+R 失败并重置
+N 成功并重置
+Ctrl+C 或关闭窗口退出
+```
+
+Leader 模式：
+
+```text
+B 开始跟随真实 leader
 R 失败并重置
 N 成功并重置
 Ctrl+C 或关闭窗口退出
