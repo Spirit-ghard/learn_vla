@@ -1,0 +1,280 @@
+# Stage Status
+
+本文档记录每个阶段的目标、当前实现、启动方式和验证状态。
+
+## 分支现状
+
+| 分支 | 作用 | 当前说明 |
+| --- | --- | --- |
+| `main` | 当前主线 | 指向 `stage_2_2` 最新提交 |
+| `stage_1` | 第一阶段最小场景 | 已完成 |
+| `stage_2` | 第二阶段单相机 LeIsaac 风格基线 | 已完成，过程版本 |
+| `stage_2_1` | 第二阶段过程版本 | 已完成，过程版本 |
+| `stage_2_2` | 第二阶段当前最新 | 已完成，支持单/双相机和 ground 性能 profile |
+
+已删除本地历史分支：
+
+```text
+dev_1
+dev_2
+stage_3
+stage_4
+stage_5
+stage_6
+```
+
+注意：远端是否还保留这些历史分支需用 `git branch -r` 另行确认。
+
+## Stage 1：任务环境
+
+状态：已完成。
+
+对应分支：
+
+```text
+stage_1
+```
+
+目标：
+
+- 创建 IsaacLab ManagerBasedRLEnv 任务。
+- 注册 `Lwh-SO101-Table-v0`。
+- 包含 SO101 Follower、ground、桌子、方块、灯光、front camera、wrist camera。
+- 提供关节状态、相机图像、末端状态、上一帧 action 观测。
+- 提供默认 reset event。
+
+关键文件：
+
+```text
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/__init__.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/so101_table_env_cfg.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/mdp.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/so101.py
+scripts/run_env.py
+```
+
+正式启动：
+
+```bash
+python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
+```
+
+验证过的内容：
+
+- task id 可由 gym registry 识别。
+- 环境可创建、reset、step。
+- cube reset 后回到初始位置。
+- front/wrist 相机张量为 `640 x 480 x 3`，非空白。
+- 关节顺序为 SO101 契约顺序。
+
+记录：
+
+```text
+docs/stage1_validation.md
+docs/compatibility.md
+```
+
+## Stage 2：键盘遥操作
+
+状态：已完成。
+
+对应分支：
+
+```text
+stage_2_2
+```
+
+目标：
+
+- 创建通用键盘遥操作入口。
+- 参数保留核心任务选择和环境数量，并支持性能调试项。
+- 使用 `AppLauncher` 启动 Isaac Sim。
+- 导入任务注册模块。
+- `parse_env_cfg(task)` 后调用 `env_cfg.use_teleop_device("keyboard")`。
+- `gym.make(task, cfg=env_cfg).unwrapped` 创建环境。
+- `SO101Keyboard(env)` 使用 Carb/Omniverse 键盘事件回调。
+- 主循环执行 `teleop.advance()`、`env.step(action)` 和等待时 `env.sim.render()`。
+
+关键文件：
+
+```text
+scripts/teleop.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/devices/so101_keyboard.py
+```
+
+正式启动：
+
+```bash
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode front
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual
+```
+
+关键参数：
+
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `--task` | `Lwh-SO101-Table-v0` | Gym task id |
+| `--num_envs` | `1` | 仿真环境数量，键盘遥操作建议 1 |
+| `--camera_mode` | `dual` | `front` 只保留前视；`dual` 保留 front+wrist |
+| `--ground_mode` | `off` | teleop 默认移除额外 ground，对齐 LeIsaac GUI 性能 |
+| `--teleop_render_interval` | `1` | 每多少个 physics step 渲染一次 |
+| `--teleop_antialiasing_mode` | unset | 可选覆盖 AA |
+| `--teleop_rendering_mode` | unset | 可选覆盖 rendering preset |
+| `--quality` | false | 对齐 LeIsaac `--quality`，启用 `FXAA + quality` |
+
+按键：
+
+```text
+B 开始控制
+W/S 前后
+A/D 左右
+Q/E 上下
+I/K/J/L 旋转
+U/O 夹爪
+R 失败并重置
+N 成功并重置
+Ctrl+C 或关闭窗口退出
+```
+
+验证过的内容：
+
+- GUI 可创建窗口并处理 Carb 键盘事件。
+- `B` 可以开始控制。
+- `D` 和 `U` 可以产生非零动作并移动机器人。
+- `R` 触发失败 reset。
+- `N` 触发成功 reset。
+- 单相机和双相机模式均可创建、step、出图。
+- `--ground_mode on` 可恢复完整 ground 并正常运行。
+- 默认 `--ground_mode off` 与 LeIsaac 单相机 GUI 性能基本对齐。
+
+性能数据：
+
+| Case | Ground | Wall loop Hz | Control segment Hz |
+| --- | --- | ---: | --- |
+| LeIsaac 单相机 | 无额外 ground | 30.45 | 27.09 / 32.04 |
+| LWH 原单相机 | on | 25.72 | 23.46 / 26.78 |
+| LWH 原双相机 | on | 20.56 | 19.05 / 21.12 |
+| LWH 优化后单相机 | off | 32.16 | 28.51 / 34.38 |
+| LWH 优化后双相机 | off | 25.68 | 23.47 / 26.81 |
+
+记录：
+
+```text
+docs/stage2_validation.md
+docs/stage2_gui_performance_report.md
+```
+
+## Stage 3：数据录制
+
+状态：未开始。
+
+建议从 `stage_2_2` 新建分支：
+
+```bash
+git checkout stage_2_2
+git checkout -b stage_3
+```
+
+目标：
+
+- 新增独立录制入口，例如 `scripts/record_hdf5.py`。
+- 不把录制逻辑写入任务配置文件。
+- 初期优先写 HDF5，降低 IsaacLab 运行环境中的 LeRobot 依赖耦合。
+- 可以参考 LeIsaac 的 HDF5 recorder/teleop 流程，但不要直接 import LeIsaac。
+
+建议最小数据 schema：
+
+```text
+/episodes/{episode_index}/observation/state
+/episodes/{episode_index}/observation/images/front
+/episodes/{episode_index}/observation/images/wrist
+/episodes/{episode_index}/action
+/episodes/{episode_index}/timestamp
+/episodes/{episode_index}/frame_index
+/episodes/{episode_index}/task
+/episodes/{episode_index}/success
+/episodes/{episode_index}/initial_state
+/metadata/task
+/metadata/fps
+/metadata/joint_names
+/metadata/action_dim
+/metadata/camera_keys
+```
+
+episode 生命周期：
+
+```text
+B: 开始操作和录制 episode
+R: 结束当前 episode，标记失败，reset 进入下一 episode
+N: 结束当前 episode，标记成功，reset 进入下一 episode
+Ctrl+C: 安全关闭文件
+```
+
+需要验证：
+
+- 录制文件能被 `h5py` 打开。
+- episode 数量、frame 数量、success 标记正确。
+- 每帧 state/action/timestamp/image 对齐。
+- 图像非空白，shape 符合 `640 x 480 x 3`。
+- 不连接真实机器人。
+
+## Stage 4：数据回放
+
+状态：未开始。
+
+目标：
+
+- 新增独立回放入口，例如 `scripts/replay_hdf5.py`。
+- 读取指定 HDF5 episode。
+- 尽量恢复录制初始状态。
+- 按原始频率逐帧应用 action。
+- 支持选择 episode、暂停、继续、退出。
+- 用于验证数据正确性，不依赖模型。
+
+需要验证：
+
+- 机器人轨迹可重复。
+- 方块状态合理。
+- 相机画面随动作变化且不空白。
+- pause/resume/quit 可用。
+
+## Stage 5：LeRobot 转换与训练
+
+状态：未开始。
+
+目标：
+
+- 在独立 LeRobot 环境中转换 HDF5 到 LeRobotDataset v3。
+- 校验关节顺序、单位、图像尺寸和 FPS。
+- 用 LeRobotDataset 加载并可视化。
+- 训练 ACT、Diffusion Policy、SmolVLA 等模型。
+- 保存 checkpoint 和完整归一化统计。
+
+注意：
+
+- Stage 5 需要重新检查当前 LeRobot Dataset v3 API，不凭记忆写。
+- 训练环境与 IsaacLab 环境分离，避免依赖冲突。
+
+## Stage 6：远程推理
+
+状态：未开始。
+
+目标：
+
+- IsaacLab Policy Client：发送 observation，接收 action，执行 env.step。
+- LeRobot Policy Server：加载 checkpoint，observation -> policy -> action。
+
+需要定义：
+
+- observation/action schema
+- 图像编码方式
+- timeout
+- action horizon
+- timestamp
+- reset 协议
+- server 断开时的安全行为
+
+注意：
+
+- 这一阶段才引入 client/server 通信。
+- 不使用真实机器人。
