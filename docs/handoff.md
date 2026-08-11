@@ -165,14 +165,6 @@ Stage 5 最小目标：
 - 保存 checkpoint 和归一化统计。
 - 暂不引入 IsaacLab 远程推理，Stage 6 再做 policy client/server。
 
-## 后续对话启动提示
-
-如果上下文不足，新对话直接给助手这句话：
-
-```text
-先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 5 LeRobot 训练。不要控制真实 follower，不要直接 import LeIsaac；LeRobot 只在训练/转换/标定环境中使用。
-```
-
 ## 注意事项
 
 - 不要直接从 LeIsaac import 任务、模板或设备。
