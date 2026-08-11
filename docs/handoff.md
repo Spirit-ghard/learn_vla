@@ -118,14 +118,6 @@ Stage 3 最小目标：
 - 明确 episode 生命周期：`B` 开始，`R` 失败结束，`N` 成功结束，reset 下一集。
 - 录制后新增最小读取校验。
 
-## 后续对话启动提示
-
-如果上下文不足，新对话直接给助手这句话：
-
-```text
-先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 3 数据录制。不要控制真实 follower，不要直接 import LeIsaac 或 LeRobot 到 Isaac 进程。
-```
-
 ## 注意事项
 
 - 不要直接从 LeIsaac import 任务、模板或设备。

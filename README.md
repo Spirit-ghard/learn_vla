@@ -2,31 +2,6 @@
 
 当前分支是 `stage_2_3`：在第二阶段键盘遥操作基础上，新增真实 SO101 Leader 作为仿真遥操作输入。
 
-## 后续开发上下文
-
-如果后续对话上下文不足，先阅读这些文件再继续开发：
-
-- [AGENTS.md](AGENTS.md)：项目硬性边界和 Codex 接手规则。
-- [project_context.md](docs/project_context.md)：项目总目标、目录结构、运行环境、任务和相机配置。
-- [stage_status.md](docs/stage_status.md)：六个阶段的目标、完成状态、启动方式和下一步。
-- [decision_log.md](docs/decision_log.md)：已经做过的关键技术决策及原因。
-- [handoff.md](docs/handoff.md)：当前交接状态和新对话启动提示。
-- [compatibility.md](docs/compatibility.md)：Isaac Sim、IsaacLab、LeIsaac、Python、GPU 等版本记录。
-- [portability.md](docs/portability.md)：项目搬迁、内置资产和外部环境变量说明。
-
-策略：
-
-- 渲染和运行参数继续对齐 LeIsaac `LeIsaac-SO101-LiftCube-v0`。
-- `front` 和 `wrist` 相机位置使用本项目之前自定义的位姿。
-- 默认不强制 `quality + FXAA`，先使用 IsaacLab/LeIsaac 默认渲染路径。
-- 遥操作默认关闭额外 ground plane，对齐 LeIsaac 桌面任务的 GUI 性能；任务配置本身仍保留 ground。
-- 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
-- `--teleop_device so101leader` 只读取真实 leader 串口位置并驱动仿真 follower，不控制真实 follower。
-- SO101 Follower USD 已内置在项目目录：`source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/robots/so101_follower.usd`。
-
-项目只运行 IsaacLab 仿真，不启动 ROS，不控制真实机器人。stage2_3 允许在显式选择
-`so101leader` 时访问真实 leader 串口作为输入设备。
-
 ## 使用方式
 
 进入项目目录：
