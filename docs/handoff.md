@@ -138,14 +138,6 @@ Stage 4 最小目标：
 - 支持选择 episode、暂停、继续和退出。
 - 对比机器人轨迹、方块状态和相机画面。
 
-## 后续对话启动提示
-
-如果上下文不足，新对话直接给助手这句话：
-
-```text
-先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 4 HDF5 回放。不要控制真实 follower，不要直接 import LeIsaac；LeRobot 只在训练/转换环境中使用。
-```
-
 ## 注意事项
 
 - 不要直接从 LeIsaac import 任务、模板或设备。
