@@ -1,6 +1,6 @@
 # 版本兼容记录
 
-检查日期：2026-08-08。
+检查日期：2026-08-11。
 
 ## 仿真环境
 
@@ -25,8 +25,20 @@ PyTorch 2.5.1 配套。本项目按该组合锁定。LeIsaac 只作为源码参�
 
 本机 LeRobot 源码 `/home/a/lerobot_05` 的 `pyproject.toml` 标记版本为 `0.5.1`，
 并要求 Python `>=3.12`。Isaac Sim 4.5 / IsaacLab 当前运行环境是 Python `3.10.20`，
-因此 stage2_3 不把 LeRobot 0.5.1 直接导入 Isaac 进程；真实 SO101 Leader
+因此 Stage 2.3/3 不把 LeRobot 0.5.1 直接导入 Isaac 进程；真实 SO101 Leader
 读取逻辑按 LeRobot/LeIsaac 源码格式用 `scservo_sdk` 重写最小串口 reader。
+
+Stage 3 转换验证使用 conda 环境 `lerobot05`：
+
+```text
+Python: 3.12.13
+LeRobot: 0.5.1
+LeRobot source commit: 2ea20910
+```
+
+本机 `--image_format video` 可写出 LeRobotDataset v3 video 数据集；默认读取时
+`torchcodec` 因 FFmpeg 动态库链路失败而报错，显式 `video_backend="pyav"` 可以读取。
+因此转换脚本默认使用 `--image_format image`，保证当前训练环境可直接加载。
 
 ## Python-only 运行入口
 

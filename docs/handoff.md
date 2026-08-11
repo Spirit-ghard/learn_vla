@@ -13,13 +13,13 @@
 当前分支：
 
 ```text
-stage_2_3
+stage_3
 ```
 
 最新提交：
 
 ```text
-stage 2.3: add SO101 leader teleoperation
+stage 3: add hdf5 recording and lerobot conversion
 ```
 
 当前主线：
@@ -28,6 +28,7 @@ stage 2.3: add SO101 leader teleoperation
 main: 暂未更新到本地最新阶段分支
 stage_2_2: 键盘遥操作封存版
 stage_2_3: 当前最新，真实 SO101 Leader 输入
+stage_3: HDF5 数据录制和 LeRobotDataset v3 转换
 ```
 
 当前远端：
@@ -43,6 +44,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 - Stage 2.2：单/双相机可选，teleop 默认关闭额外 ground，并使用 30 Hz 渲染口径提升遥操作控制频率。
 - Stage 2.3：新增真实 SO101 Leader 串口输入，只控制 IsaacLab 仿真 follower。
 - 可搬迁性：SO101 Follower USD 和当前 leader 校准已放入项目目录，默认不再依赖 LeIsaac 资产安装路径。
+- Stage 3：新增 HDF5 录制入口和 HDF5 到 LeRobotDataset v3 转换入口。
 
 ## 当前可用命令
 
@@ -68,6 +70,31 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode d
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0
+```
+
+键盘录制 HDF5：
+
+```bash
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
+```
+
+双相机录制 HDF5：
+
+```bash
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
+```
+
+真实 SO101 Leader 输入录制 HDF5：
+
+```bash
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+转换 LeRobotDataset v3：
+
+```bash
+conda activate lerobot05
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
 ```
 
 启动后立即跟随 leader：
@@ -100,30 +127,23 @@ docs/portability.md
 
 ## 下一步建议
 
-下一步应进入 Stage 3 数据录制。
+下一步应进入 Stage 4 数据回放。
 
-建议创建分支：
+Stage 4 最小目标：
 
-```bash
-git checkout stage_2_3
-git checkout -b stage_3
-```
-
-Stage 3 最小目标：
-
-- 新增独立 Python 入口，例如 `scripts/record_hdf5.py`。
-- 复用 `SO101Keyboard`、`SO101LeaderArm` 和 `teleop.py` 的任务创建/相机/ground 配置逻辑。
-- 写 HDF5，不直接依赖 LeRobot。
-- 记录 state、front image、可选 wrist image、action、timestamp、episode_index、frame_index、task。
-- 明确 episode 生命周期：`B` 开始，`R` 失败结束，`N` 成功结束，reset 下一集。
-- 录制后新增最小读取校验。
+- 新增独立 Python 入口 `scripts/replay_hdf5.py`。
+- 读取 Stage 3 HDF5 的指定 episode。
+- 使用 `initial_state` 重置场景。
+- 按原始频率逐帧应用 `action`。
+- 支持选择 episode、暂停、继续和退出。
+- 对比机器人轨迹、方块状态和相机画面。
 
 ## 后续对话启动提示
 
 如果上下文不足，新对话直接给助手这句话：
 
 ```text
-先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 3 数据录制。不要控制真实 follower，不要直接 import LeIsaac 或 LeRobot 到 Isaac 进程。
+先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 4 HDF5 回放。不要控制真实 follower，不要直接 import LeIsaac；LeRobot 只在训练/转换环境中使用。
 ```
 
 ## 注意事项
@@ -134,3 +154,5 @@ Stage 3 最小目标：
 - 不要新增 shell 启动脚本。
 - 每次实现一个阶段，完成验证后再进入下一阶段。
 - 内部验证产物不要保留在仓库里。
+- Stage 3 HDF5 使用 `/data/demo_N` 和 `/episodes/000000` 两套入口；`/episodes` 是硬链接。
+- 转换脚本默认只转换成功 episode、跳过前 5 帧、输出 LeRobot image 格式。

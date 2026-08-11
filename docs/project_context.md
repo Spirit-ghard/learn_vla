@@ -4,7 +4,7 @@
 
 ## 总目标
 
-基于 IsaacLab 搭建一套只面向仿真的机器人学习流程，参考 LeIsaac 的任务组织方式，并使用 LeRobot 完成数据训练。当前不部署或控制真实机器人；stage2_3 只允许读取真实 SO101 Leader 作为仿真输入设备。
+基于 IsaacLab 搭建一套只面向仿真的机器人学习流程，参考 LeIsaac 的任务组织方式，并使用 LeRobot 完成数据训练。当前不部署或控制真实机器人；Stage 2.3/3 只允许读取真实 SO101 Leader 作为仿真输入设备。
 
 最终目标流程：
 
@@ -33,13 +33,13 @@ Lwh-SO101-Table-v0
 当前最新分支：
 
 ```text
-stage_2_3
+stage_3
 ```
 
 当前最新提交：
 
 ```text
-stage 2.3: add SO101 leader teleoperation
+stage 3: add hdf5 recording and lerobot conversion
 ```
 
 `main` 暂未更新到本地最新阶段分支。
@@ -67,8 +67,11 @@ scripts/
   isaac_runtime.py
   run_env.py
   teleop.py
+  record_hdf5.py
+  convert_hdf5_to_lerobot.py
   validate_env.py
   validate_teleop.py
+  validate_record_hdf5.py
 
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/
   __init__.py
@@ -93,6 +96,7 @@ docs/
   stage1_validation.md
   stage2_validation.md
   stage2_gui_performance_report.md
+  stage3_validation.md
   project_context.md
   stage_status.md
   decision_log.md
@@ -142,7 +146,9 @@ LWH_SIM_ASSETS_ROOT 临时覆盖仿真资产根目录
 | IsaacLab Python package | 0.41.3 |
 | IsaacLab Tasks | 0.10.36 |
 | LeIsaac | 0.4.0 / `24d3bcd3f1e4585740fc79921782c41617237812` |
-| Python | 3.10.20 |
+| Isaac Python | 3.10.20 |
+| LeRobot Python | 3.12.13 |
+| LeRobot | 0.5.1 / `2ea20910` |
 | PyTorch | 2.5.1+cu124 |
 | GPU | NVIDIA GeForce RTX 3060 Laptop, 6 GiB |
 
@@ -221,6 +227,74 @@ gripper
 - `JointPositionActionCfg` 控制 `gripper`
 - 动作维度为 `6`
 - 真实 leader 位置按 LeRobot/LeIsaac 校准格式归一化，再映射到仿真 follower 关节角范围
+
+## Stage 3 数据录制
+
+Isaac 端录制入口：
+
+```text
+scripts/record_hdf5.py
+```
+
+LeRobot 转换入口：
+
+```text
+scripts/convert_hdf5_to_lerobot.py
+```
+
+HDF5 主结构：
+
+```text
+/data/demo_N
+/episodes/000000
+/metadata
+```
+
+`/episodes/000000` 是指向 `/data/demo_0` 的硬链接，便于同时兼容 LeIsaac/IsaacLab
+风格和本项目前面定义的 episode 路径。
+
+每帧关键字段：
+
+```text
+observation/state
+observation/images/front
+observation/images/wrist
+action
+timestamp
+episode_index
+frame_index
+task
+```
+
+每个 episode 还写入：
+
+```text
+success
+valid
+num_samples
+initial_state
+```
+
+episode 生命周期：
+
+```text
+B 开始录制
+R 结束并标记 failure
+N 结束并标记 success
+Ctrl+C 安全关闭；活动 episode 标记 interrupted/failure
+```
+
+转换规则：
+
+```text
+默认只转换 success=True episode
+默认跳过前 5 帧
+默认输出 LeRobot image 格式
+--image_format video 可输出 video 格式
+```
+
+当前本机 LeRobot 0.5.1 可写出 video dataset，但默认 torchcodec 读取因 FFmpeg 动态库链路失败；
+显式 `video_backend="pyav"` 可读。第一版正式转换默认使用 image 格式，保证训练端直接可加载。
 
 ## 相机配置
 

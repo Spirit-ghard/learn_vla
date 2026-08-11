@@ -9,3 +9,5 @@ dependencies/
 # 仿真验证生成的报告和相机图像。
 artifacts/
 
+# 正式采集和转换的数据集通常体积很大，不纳入代码仓库。
+datasets/

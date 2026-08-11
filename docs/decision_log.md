@@ -220,18 +220,43 @@
 
 决策：
 
-- 下一阶段优先实现 HDF5 录制。
+- Stage 3 使用独立 Isaac 入口 `scripts/record_hdf5.py` 录制 HDF5。
+- Stage 3 使用独立 LeRobot 入口 `scripts/convert_hdf5_to_lerobot.py` 转换 LeRobotDataset v3。
 - 暂不在 IsaacLab 仿真环境内直接依赖 LeRobot。
 
 原因：
 
 - 减少 IsaacLab 环境和 LeRobot 训练环境的依赖耦合。
 - LeIsaac 官方流程也支持先录 HDF5，再转换。
+- 本机 LeRobot 0.5.1 要求 Python `>=3.12`，IsaacSim/IsaacLab 运行环境是 Python `3.10.20`。
 
 影响：
 
-- Stage 3 应新增独立 recorder 入口。
-- Stage 5 再引入 LeRobotDataset v3 API，并需要当时重新查官方源码/文档。
+- Isaac 进程只 import IsaacLab/h5py，不 import LeRobot。
+- 转换脚本只 import h5py/LeRobot，不启动 IsaacSim。
+- HDF5 主结构采用 `/data/demo_N`，同时提供 `/episodes/000000` 硬链接。
+- 每帧写入 `observation/state`、`observation/images/*`、`action`、`timestamp`、`episode_index`、`frame_index`、`task`。
+- episode 按 `B` 开始录制，`R` 标记失败结束，`N` 标记成功结束。
+- LeRobot 转换默认只转换成功 episode，并跳过前 5 帧。
+
+## 2026-08-11：LeRobot 转换默认使用 image 格式
+
+决策：
+
+- `scripts/convert_hdf5_to_lerobot.py` 默认 `--image_format image`。
+- 保留 `--image_format video` 作为显式选项。
+
+原因：
+
+- 本机 LeRobot 0.5.1 环境可以成功写出 video dataset，但默认加载路径会走 `torchcodec`。
+- 当前 `torchcodec` 与 FFmpeg 动态库链路不完整，直接 `LeRobotDataset(...)` 读取 video 会失败。
+- 显式 `video_backend="pyav"` 可以读取已写出的 video dataset。
+- image 格式占用空间更大，但当前本机可直接加载，更适合作为第一版稳定转换默认值。
+
+影响：
+
+- 后续训练可以先使用 image 格式数据集，避免 video decoder 阻塞训练验证。
+- 需要节省磁盘时可显式转换 `--image_format video`，并在 LeRobot 加载/训练配置中指定 `pyav` 或修复 torchcodec/FFmpeg。
 
 ## 术语说明：Wall loop Hz 和 Control segment Hz
 

@@ -11,14 +11,14 @@
 | `stage_2` | 第二阶段单相机 LeIsaac 风格基线 | 已完成，过程版本 |
 | `stage_2_1` | 第二阶段过程版本 | 已完成，过程版本 |
 | `stage_2_2` | 第二阶段键盘遥操作封存版 | 已完成，支持单/双相机和 ground 性能 profile |
-| `stage_2_3` | 第二阶段当前最新 | 已完成，新增真实 SO101 Leader 输入控制仿真 |
+| `stage_2_3` | 第二阶段真实 Leader 版 | 已完成，新增真实 SO101 Leader 输入控制仿真 |
+| `stage_3` | 第三阶段数据录制 | 已完成，HDF5 录制和 HDF5 到 LeRobotDataset v3 转换 |
 
 已删除本地历史分支：
 
 ```text
 dev_1
 dev_2
-stage_3
 stage_4
 stage_5
 stage_6
@@ -202,25 +202,50 @@ docs/stage2_gui_performance_report.md
 
 ## Stage 3：数据录制
 
-状态：未开始。
+状态：已完成。
 
-建议从 `stage_2_3` 新建分支：
+对应分支：
 
-```bash
-git checkout stage_2_3
-git checkout -b stage_3
+```text
+stage_3
 ```
 
 目标：
 
-- 新增独立录制入口，例如 `scripts/record_hdf5.py`。
+- 新增独立录制入口 `scripts/record_hdf5.py`。
 - 不把录制逻辑写入任务配置文件。
 - 初期优先写 HDF5，降低 IsaacLab 运行环境中的 LeRobot 依赖耦合。
-- 可以参考 LeIsaac 的 HDF5 recorder/teleop 流程，但不要直接 import LeIsaac。
+- 参考 LeIsaac 的 HDF5 recorder/teleop 流程，但不直接 import LeIsaac。
+- 新增独立转换入口 `scripts/convert_hdf5_to_lerobot.py`。
+- 转换脚本在 LeRobot Python 3.12 环境运行，不在 IsaacSim Python 3.10 进程内 import LeRobot。
 
-建议最小数据 schema：
+关键文件：
 
 ```text
+scripts/record_hdf5.py
+scripts/convert_hdf5_to_lerobot.py
+scripts/validate_record_hdf5.py
+```
+
+正式录制：
+
+```bash
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
+python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+正式转换：
+
+```bash
+conda activate lerobot05
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
+```
+
+HDF5 数据 schema：
+
+```text
+/data/demo_N
 /episodes/{episode_index}/observation/state
 /episodes/{episode_index}/observation/images/front
 /episodes/{episode_index}/observation/images/wrist
@@ -246,13 +271,34 @@ N: 结束当前 episode，标记成功，reset 进入下一 episode
 Ctrl+C: 安全关闭文件
 ```
 
-需要验证：
+转换规则：
+
+```text
+默认只转换 success=True episode
+默认跳过 episode 前 5 帧
+默认输出 LeRobot image 格式
+可通过 --image_format video 输出 video 格式
+可通过 --action_key observation/joint_pos_target 改变 action 来源
+```
+
+验证过的内容：
 
 - 录制文件能被 `h5py` 打开。
 - episode 数量、frame 数量、success 标记正确。
 - 每帧 state/action/timestamp/image 对齐。
 - 图像非空白，shape 符合 `640 x 480 x 3`。
 - 不控制真实机器人；如需 leader 输入，只读取 leader 串口。
+- 单相机 HDF5 录制通过。
+- 双相机 HDF5 录制通过。
+- 单相机 HDF5 可转换为 LeRobotDataset v3 image 格式并由 `LeRobotDataset` 加载。
+- 双相机 HDF5 可转换为 LeRobotDataset v3 image 格式并由 `LeRobotDataset` 加载。
+- video 格式可写出；本机默认 torchcodec 解码链路失败，显式 `video_backend="pyav"` 可加载。
+
+记录：
+
+```text
+docs/stage3_validation.md
+```
 
 ## Stage 4：数据回放
 
