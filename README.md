@@ -6,12 +6,13 @@
 
 如果后续对话上下文不足，先阅读这些文件再继续开发：
 
-- [AGENTS.md](/home/a/lwh_code/lwh_robot_learning/AGENTS.md)：项目硬性边界和 Codex 接手规则。
-- [project_context.md](/home/a/lwh_code/lwh_robot_learning/docs/project_context.md)：项目总目标、目录结构、运行环境、任务和相机配置。
-- [stage_status.md](/home/a/lwh_code/lwh_robot_learning/docs/stage_status.md)：六个阶段的目标、完成状态、启动方式和下一步。
-- [decision_log.md](/home/a/lwh_code/lwh_robot_learning/docs/decision_log.md)：已经做过的关键技术决策及原因。
-- [handoff.md](/home/a/lwh_code/lwh_robot_learning/docs/handoff.md)：当前交接状态和新对话启动提示。
-- [compatibility.md](/home/a/lwh_code/lwh_robot_learning/docs/compatibility.md)：Isaac Sim、IsaacLab、LeIsaac、Python、GPU 等版本记录。
+- [AGENTS.md](AGENTS.md)：项目硬性边界和 Codex 接手规则。
+- [project_context.md](docs/project_context.md)：项目总目标、目录结构、运行环境、任务和相机配置。
+- [stage_status.md](docs/stage_status.md)：六个阶段的目标、完成状态、启动方式和下一步。
+- [decision_log.md](docs/decision_log.md)：已经做过的关键技术决策及原因。
+- [handoff.md](docs/handoff.md)：当前交接状态和新对话启动提示。
+- [compatibility.md](docs/compatibility.md)：Isaac Sim、IsaacLab、LeIsaac、Python、GPU 等版本记录。
+- [portability.md](docs/portability.md)：项目搬迁、内置资产和外部环境变量说明。
 
 策略：
 
@@ -21,6 +22,7 @@
 - 遥操作默认关闭额外 ground plane，对齐 LeIsaac 桌面任务的 GUI 性能；任务配置本身仍保留 ground。
 - 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
 - `--teleop_device so101leader` 只读取真实 leader 串口位置并驱动仿真 follower，不控制真实 follower。
+- SO101 Follower USD 已内置在项目目录：`source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/robots/so101_follower.usd`。
 
 项目只运行 IsaacLab 仿真，不启动 ROS，不控制真实机器人。stage2_3 允许在显式选择
 `so101leader` 时访问真实 leader 串口作为输入设备。
@@ -30,7 +32,7 @@
 进入项目目录：
 
 ```bash
-cd /home/a/lwh_code/lwh_robot_learning
+cd <repo>
 git checkout stage_2_3
 ```
 
@@ -146,7 +148,7 @@ Leader 串口相关参数：
 
 ```text
 --leader_port             leader 串口，默认 /dev/ttyACM0
---leader_calibration      显式校准 JSON；不传时优先环境变量、LeRobot cache、LeIsaac cache
+--leader_calibration      显式校准 JSON；不传时优先环境变量、项目 configs、LeRobot cache、LeIsaac cache
 --leader_id               用于查找 LeRobot cache 下的校准文件
 --leader_start_immediately 启动后不等 B，直接跟随 leader
 --leader_keep_torque      不在连接时关闭 leader 扭矩

@@ -127,7 +127,7 @@ LeIsaac 对照启动结果：
 | 串口默认值 | `/dev/ttyACM0` |
 | 动作空间 | 6D joint position |
 | 默认相机 | `front`, `640 x 480 @ 30 FPS` |
-| 校准文件查找 | 参数、环境变量、LeRobot cache、LeIsaac cache |
+| 校准文件查找 | 参数、环境变量、项目 configs、LeRobot cache、LeIsaac cache |
 | 真实设备边界 | 读取 leader 位置，不控制真实 follower，不启动 ROS |
 
 正式使用：
@@ -173,7 +173,7 @@ GUI 性能对比见 `docs/stage2_gui_performance_report.md`。
 - `compileall` 通过。
 - `scripts/teleop.py --help` 可显示 `--teleop_device so101leader` 和 leader 参数。
 - `/dev/ttyACM0` 可握手真实 SO101 Leader 的 6 个电机。
-- 校准文件使用 LeIsaac cache：`so101_leader.json`。
+- 校准文件当前默认使用项目 `configs/so101_leader_calibration.json`；该文件来源于已跑通的本机 LeIsaac cache。
 - 可读取 raw position 和归一化 position。
 - 键盘验证路径仍通过，`LWH_STAGE2_VALIDATION_OK`。
 - leader 完整入口可创建 IsaacLab GUI 环境，动作管理器为 6D joint position。

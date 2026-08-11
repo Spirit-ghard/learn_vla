@@ -78,7 +78,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--leader_calibration",
         default=None,
-        help="SO101 leader calibration JSON. Defaults to LWH_SO101_LEADER_CALIBRATION, LeRobot, then LeIsaac cache.",
+        help=(
+            "SO101 leader calibration JSON. Defaults to LWH_SO101_LEADER_CALIBRATION, "
+            "project configs, LeRobot cache, then LeIsaac cache."
+        ),
     )
     parser.add_argument(
         "--leader_id",

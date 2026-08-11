@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,11 +11,12 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ISAAC_PYTHON = Path("/home/a/anaconda3/envs/lwh_isaac/bin/python")
-DEFAULT_ASSETS_ROOT = Path("/home/a/.local/share/ov/pkg/leisaac/assets")
+DEFAULT_ASSETS_ROOT = PROJECT_ROOT / "source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets"
 RUNTIME_MARKER = "LWH_ISAAC_RUNTIME_READY"
 SIM_ASSETS_ENV = "LWH_SIM_ASSETS_ROOT"
 LEGACY_ASSETS_ENV = "LEISAAC_ASSETS_ROOT"
+ISAAC_PYTHON_ENV = "LWH_ISAAC_PYTHON"
+ISAAC_SIM_ROOT_ENV = "LWH_ISAAC_SIM_ROOT"
 
 
 def _without_robot_paths(value: str | None) -> list[str]:
@@ -32,13 +34,61 @@ def _existing_paths(paths: list[Path]) -> list[str]:
     return [str(path) for path in paths if path.exists()]
 
 
-def _build_runtime_environment() -> tuple[Path, dict[str, str]]:
-    isaac_link = PROJECT_ROOT / "dependencies/IsaacLab/_isaac_sim"
-    if not isaac_link.exists():
-        raise RuntimeError(f"Isaac Sim link does not exist: {isaac_link}")
-    isaac_root = isaac_link.resolve()
+def _resolve_target_python() -> Path:
+    """优先使用当前已激活 Python；旧系统 Python 下尝试常见 Isaac conda 环境。"""
+    configured_python = os.environ.get(ISAAC_PYTHON_ENV)
+    if configured_python:
+        return Path(configured_python).expanduser().resolve()
+    if sys.version_info >= (3, 10):
+        return Path(sys.executable).resolve()
 
-    target_python = Path(os.environ.get("LWH_ISAAC_PYTHON", str(DEFAULT_ISAAC_PYTHON))).resolve()
+    candidates = [
+        Path.home() / "anaconda3/envs/lwh_isaac/bin/python",
+        Path.home() / "miniconda3/envs/lwh_isaac/bin/python",
+    ]
+    python310 = shutil.which("python3.10")
+    if python310:
+        candidates.append(Path(python310))
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    return Path(sys.executable).resolve()
+
+
+def _resolve_isaac_root() -> Path:
+    """按可搬迁优先级查找 Isaac Sim 根目录。"""
+    candidates: list[Path] = []
+    for env_name in (ISAAC_SIM_ROOT_ENV, "ISAAC_PATH"):
+        configured = os.environ.get(env_name)
+        if configured:
+            candidates.append(Path(configured).expanduser())
+
+    candidates.extend(
+        [
+            PROJECT_ROOT / "dependencies/IsaacLab/_isaac_sim",
+            Path.home() / ".local/share/ov/pkg/isaac-sim-4.5.0",
+            Path.home() / ".local/share/ov/pkg/isaac-sim",
+        ]
+    )
+
+    for candidate in candidates:
+        root = candidate.resolve()
+        if (root / "kit").exists() and (root / "apps").exists():
+            return root
+
+    searched = "\n".join(f"- {candidate}" for candidate in candidates)
+    raise RuntimeError(
+        "Isaac Sim root was not found. Set LWH_ISAAC_SIM_ROOT or ISAAC_PATH to the Isaac Sim install path.\n"
+        f"Searched:\n{searched}"
+    )
+
+
+def _build_runtime_environment() -> tuple[Path, dict[str, str]]:
+    isaac_root = _resolve_isaac_root()
+
+    target_python = _resolve_target_python()
     if not target_python.is_file():
         raise RuntimeError(f"Isaac Python interpreter does not exist: {target_python}")
 

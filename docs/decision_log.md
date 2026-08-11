@@ -7,7 +7,7 @@
 决策：
 
 - 项目运行时不直接 import `leisaac`。
-- LeIsaac 只作为源码参考和 SO101 USD 资产来源。
+- LeIsaac 只作为源码参考；SO101 USD 已复制到项目包目录。
 
 原因：
 
@@ -18,7 +18,7 @@
 
 - 自行实现 `SO101Keyboard`、SO101 task cfg、MDP 函数和动作预处理。
 - `scripts/isaac_runtime.py` 不把 `dependencies/leisaac/source/leisaac` 加入 `PYTHONPATH`。
-- 仍保留 LeIsaac assets 路径作为默认 SO101 USD 来源。
+- 默认 SO101 USD 来源改为项目内置资产。
 
 ## 2026-08-08：所有入口使用 Python bootstrap，不使用 shell 脚本
 
@@ -35,7 +35,7 @@
 影响：
 
 - 入口先调用 `ensure_isaac_runtime()`。
-- 该函数自动切换到 `/home/a/anaconda3/envs/lwh_isaac/bin/python`。
+- 默认使用当前已激活 Python；如果当前 Python 低于 3.10，会尝试常见的 `lwh_isaac` conda 环境；需要跨环境重执行时通过 `LWH_ISAAC_PYTHON` 显式指定。
 - 验证脚本可通过 supervisor 模式得到可靠退出码。
 
 ## 2026-08-08：不控制真实 follower
@@ -56,7 +56,7 @@
 - 默认键盘仿真不访问 `/dev/tty*`。
 - `--teleop_device so101leader` 只读取 leader 串口位置，不控制真实 follower。
 - 不使用 LeRobot real robot API 控制真实机器人。
-- `/home/a/lwh_code/soarm_ros` 只作为名称和历史信息参考。
+- 外部 ROS/真实机器人工程只作为名称和历史信息参考，不进入运行时。
 
 ## 2026-08-08：Stage 1 使用 ManagerBasedRLEnvCfg 组合任务
 
@@ -145,9 +145,29 @@
 影响：
 
 - Leader 串口读取使用 `scservo_sdk` 的 `GroupSyncRead(Present_Position)`。
-- 默认校准路径查找顺序：`--leader_calibration`、`LWH_SO101_LEADER_CALIBRATION`、LeRobot cache、LeIsaac cache。
+- 默认校准路径查找顺序：`--leader_calibration`、`LWH_SO101_LEADER_CALIBRATION`、项目 `configs/so101_leader_calibration.json`、LeRobot cache、LeIsaac cache。
 - 默认连接时关闭 leader 扭矩，让 leader 作为被动输入设备；可用 `--leader_keep_torque` 禁止该写入。
-- 该模式仍不控制真实 follower，不启动 ROS，不访问 `/home/a/lwh_code/soarm_ros`。
+- 该模式仍不控制真实 follower，不启动 ROS，不访问外部 ROS 工程。
+
+## 2026-08-11：Stage 1/2 资产内置到项目目录
+
+决策：
+
+- 将 `so101_follower.usd` 复制到 `source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/robots/`。
+- `LWH_SIM_ASSETS_ROOT` 未设置时，默认使用项目内置资产目录。
+- `scripts/isaac_runtime.py` 不再默认绑定本机 Isaac Python 绝对路径，而是使用当前启动脚本的 Python。
+- Isaac Sim 根目录优先读取 `LWH_ISAAC_SIM_ROOT` 或 `ISAAC_PATH`。
+
+原因：
+
+- 用户要求仓库文件夹可以搬到另一台已装好环境的机器直接使用。
+- 之前 Stage 1 资产默认来自 LeIsaac 安装目录，移动仓库后会丢失。
+
+影响：
+
+- Stage 1 场景不再依赖 LeIsaac 资产目录。
+- 如果目标机器 Isaac Sim 不在常见位置，需要设置 `LWH_ISAAC_SIM_ROOT` 或 `ISAAC_PATH`。
+- 如果目标机器当前 `python3` 不是 Isaac 环境，需要设置 `LWH_ISAAC_PYTHON`。
 
 ## 2026-08-09：Stage 2 teleop 默认关闭额外 ground plane
 

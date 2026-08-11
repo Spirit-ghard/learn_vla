@@ -18,10 +18,10 @@ LeRobot 训练端
 
 ## 当前状态
 
-当前有效工作树：
+当前本机工作树：
 
 ```text
-/home/a/lwh_code/lwh_robot_learning
+<repo>
 ```
 
 当前主任务：
@@ -55,7 +55,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 - 不控制真实 follower。
 - 不启动 ROS。
 - 默认键盘仿真不访问串口；只有 `--teleop_device so101leader` 显式读取真实 leader 串口。
-- 不把 `/home/a/lwh_code/soarm_ros` 注入运行时。
+- 不把外部 ROS/真实机器人工程注入运行时。
 - 不直接 import `leisaac` Python 包。
 - 不直接 import LeRobot 到 Isaac 进程。
 - 不新增 shell 启动脚本。
@@ -73,6 +73,8 @@ scripts/
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/
   __init__.py
   assets/
+    robots/
+      so101_follower.usd
     so101_constants.py
     so101.py
   devices/
@@ -87,6 +89,7 @@ source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/
 
 docs/
   compatibility.md
+  portability.md
   stage1_validation.md
   stage2_validation.md
   stage2_gui_performance_report.md
@@ -107,22 +110,25 @@ ensure_isaac_runtime()
 
 `scripts/isaac_runtime.py` 负责：
 
-- 使用固定的 Isaac Python 解释器重新执行当前脚本。
+- 默认使用当前已激活 Python；如果当前 Python 低于 3.10，会尝试常见的 `lwh_isaac` conda 环境；需要跨环境重执行时可用 `LWH_ISAAC_PYTHON` 指定。
 - 配置 Isaac Sim、IsaacLab、Python path、动态库路径。
 - 移除 ROS 和 `soarm_ros` 路径。
-- 校验 SO101 USD 资产存在且不是 Git LFS pointer。
+- 校验项目内置 SO101 USD 资产存在且不是 Git LFS pointer。
 - 验证脚本可以通过 supervisor 模式得到可靠退出码。
 
-当前默认 Isaac Python：
+默认资产根目录：
 
 ```text
-/home/a/anaconda3/envs/lwh_isaac/bin/python
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets
 ```
 
-当前默认资产根目录：
+可选环境变量：
 
 ```text
-/home/a/.local/share/ov/pkg/leisaac/assets
+LWH_ISAAC_SIM_ROOT  指向 Isaac Sim 安装根目录
+ISAAC_PATH          Isaac Sim 官方/现有环境变量，也可作为根目录来源
+LWH_ISAAC_PYTHON    需要跨环境重执行时指定 Python
+LWH_SIM_ASSETS_ROOT 临时覆盖仿真资产根目录
 ```
 
 ## 依赖和版本
@@ -263,7 +269,7 @@ horizontal_aperture: 38.11
 Stage 1 场景运行：
 
 ```bash
-cd /home/a/lwh_code/lwh_robot_learning
+cd <repo>
 python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
 ```
 
@@ -345,7 +351,7 @@ python3 scripts/validate_teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --came
 python3 - <<'PY'
 from pathlib import Path
 import shutil
-root = Path('/home/a/lwh_code/lwh_robot_learning')
+root = Path.cwd()
 shutil.rmtree(root / 'artifacts', ignore_errors=True)
 for path in root.rglob('__pycache__'):
     if '.git' not in path.parts:

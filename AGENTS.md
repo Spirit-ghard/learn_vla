@@ -11,13 +11,13 @@
 
 ## 硬性边界
 
-- 本项目当前只面向 IsaacLab 仿真，不控制真实机器人。
-- 即使本机连接了真实 SO101 或 ROS 工程，也不得打开串口、启动 ROS 控制节点、发送真实机器人动作。
-- `/home/a/lwh_code/soarm_ros` 只能作为关节命名、硬件信息和历史实现参考。
+- 本项目当前只面向 IsaacLab 仿真，不控制真实 follower。
+- `--teleop_device so101leader` 只允许读取真实 leader 串口作为输入设备；不得启动 ROS 控制节点或发送真实 follower 动作。
+- 外部 ROS/真实机器人工程只能作为关节命名、硬件信息和历史实现参考。
 - 运行入口必须是 Python 脚本，不新增 shell 启动脚本。
 - 任务定义和运行入口必须分离：任务模块注册 gym task，入口通过 `--task` 选择任务。
 - 项目以 IsaacLab 为基础实现，不直接从 `leisaac` Python 包 import 任务、设备、环境模板或运行逻辑。
-- LeIsaac 只作为源码参考和 SO101 USD 资产来源；允许阅读 `dependencies/leisaac` 或 `/home/a/.local/share/ov/pkg/leisaac`。
+- LeIsaac 只作为源码参考；SO101 USD 资产已复制到本项目包目录，不再依赖 LeIsaac 安装目录作为默认资产来源。
 - 关键代码注释使用中文，说明为什么这么做，而不是重复代码字面含义。
 - 修改前必须先看 `git status --short`，不要覆盖用户未提交改动。
 
@@ -73,12 +73,13 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode f
 - `stage_1`：一阶段最小场景。
 - `stage_2`：二阶段单相机 LeIsaac 风格基线。
 - `stage_2_1`：二阶段过程版本。
-- `stage_2_2`：二阶段当前最新版本，支持单/双相机和 `ground_mode`。
-- `main` 当前指向 `stage_2_2` 最新提交。
+- `stage_2_2`：二阶段键盘遥操作封存版，支持单/双相机和 `ground_mode`。
+- `stage_2_3`：二阶段当前最新版本，新增真实 SO101 Leader 输入。
+- `main` 暂未更新到 `stage_2_3`。
 
-后续进入 Stage 3 时，建议从 `stage_2_2` 创建新分支：
+后续进入 Stage 3 时，建议从 `stage_2_3` 创建新分支：
 
 ```bash
-git checkout stage_2_2
+git checkout stage_2_3
 git checkout -b stage_3
 ```

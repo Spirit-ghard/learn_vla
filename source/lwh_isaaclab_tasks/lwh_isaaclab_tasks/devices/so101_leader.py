@@ -19,8 +19,10 @@ from lwh_isaaclab_tasks.assets.so101_constants import (
 )
 
 
-DEFAULT_LEISAAC_LEADER_CALIBRATION = Path(
-    "/home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_PROJECT_LEADER_CALIBRATION = PROJECT_ROOT / "configs/so101_leader_calibration.json"
+DEFAULT_LEISAAC_LEADER_CALIBRATION = (
+    Path.home() / ".local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json"
 )
 DEFAULT_LEROBOT_CALIBRATION_ROOT = Path.home() / ".cache/huggingface/lerobot/calibration/teleoperators/so_leader"
 
@@ -325,6 +327,8 @@ def resolve_leader_calibration_path(path: str | None, leader_id: str | None = No
     env_path = os.environ.get("LWH_SO101_LEADER_CALIBRATION")
     if env_path:
         return Path(env_path).expanduser()
+    if DEFAULT_PROJECT_LEADER_CALIBRATION.is_file():
+        return DEFAULT_PROJECT_LEADER_CALIBRATION
     if leader_id:
         lerobot_path = DEFAULT_LEROBOT_CALIBRATION_ROOT / f"{leader_id}.json"
         if lerobot_path.is_file():

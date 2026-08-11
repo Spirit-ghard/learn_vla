@@ -12,13 +12,13 @@ from isaaclab.assets import ArticulationCfg
 from .so101_constants import SO101_JOINT_NAMES
 
 
-DEFAULT_SIM_ASSETS_ROOT = Path("/home/a/.local/share/ov/pkg/leisaac/assets")
+DEFAULT_SIM_ASSETS_ROOT = Path(__file__).resolve().parent
 SIM_ASSETS_ENV = "LWH_SIM_ASSETS_ROOT"
 LEGACY_ASSETS_ENV = "LEISAAC_ASSETS_ROOT"
 
 
 def _resolve_assets_root() -> Path:
-    """优先使用项目自己的资产环境变量，兼容旧的本机资产目录。"""
+    """优先使用显式资产目录；默认使用仓库内置资产，保证项目目录可搬迁。"""
     configured = os.environ.get(SIM_ASSETS_ENV) or os.environ.get(LEGACY_ASSETS_ENV)
     return Path(configured).expanduser() if configured else DEFAULT_SIM_ASSETS_ROOT
 

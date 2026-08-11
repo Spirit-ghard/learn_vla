@@ -15,3 +15,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["source/lwh_isaaclab_tasks"]
+
+[tool.setuptools.package-data]
+lwh_isaaclab_tasks = ["assets/robots/*.usd"]

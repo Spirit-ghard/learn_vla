@@ -51,6 +51,7 @@ source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/__init__.py
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/so101_table_env_cfg.py
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/tasks/so101_table/mdp.py
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/so101.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/robots/so101_follower.usd
 scripts/run_env.py
 ```
 
@@ -129,7 +130,7 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device
 | `--teleop_rendering_mode` | unset | 可选覆盖 rendering preset |
 | `--quality` | false | 对齐 LeIsaac `--quality`，启用 `FXAA + quality` |
 | `--leader_port` | `/dev/ttyACM0` | SO101 Leader 串口，只在 `so101leader` 模式使用 |
-| `--leader_calibration` | unset | 显式 leader 校准 JSON；不传时查环境变量、LeRobot cache、LeIsaac cache |
+| `--leader_calibration` | unset | 显式 leader 校准 JSON；不传时查环境变量、项目 configs、LeRobot cache、LeIsaac cache |
 | `--leader_id` | unset | 用于查找 LeRobot cache 下的校准文件 |
 | `--leader_start_immediately` | false | 不等待 B，启动后直接跟随 leader |
 | `--leader_keep_torque` | false | 不在连接时关闭 leader 扭矩 |

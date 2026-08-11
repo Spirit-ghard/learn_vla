@@ -1,13 +1,13 @@
 # Handoff
 
-更新时间：2026-08-10
+更新时间：2026-08-11
 
 ## 当前交接状态
 
 当前项目：
 
 ```text
-/home/a/lwh_code/lwh_robot_learning
+<repo>
 ```
 
 当前分支：
@@ -42,6 +42,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 - Stage 2：键盘遥操作。
 - Stage 2.2：单/双相机可选，teleop 默认关闭额外 ground，并使用 30 Hz 渲染口径提升遥操作控制频率。
 - Stage 2.3：新增真实 SO101 Leader 串口输入，只控制 IsaacLab 仿真 follower。
+- 可搬迁性：SO101 Follower USD 和当前 leader 校准已放入项目目录，默认不再依赖 LeIsaac 资产安装路径。
 
 ## 当前可用命令
 
@@ -94,6 +95,7 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode f
 
 ```text
 docs/stage2_gui_performance_report.md
+docs/portability.md
 ```
 
 ## 下一步建议
@@ -121,7 +123,7 @@ Stage 3 最小目标：
 如果上下文不足，新对话直接给助手这句话：
 
 ```text
-先阅读 /home/a/lwh_code/lwh_robot_learning/AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md，再继续 Stage 3 数据录制。不要控制真实 follower，不要直接 import LeIsaac 或 LeRobot 到 Isaac 进程。
+先阅读 AGENTS.md、docs/project_context.md、docs/stage_status.md、docs/decision_log.md、docs/handoff.md、docs/portability.md，再继续 Stage 3 数据录制。不要控制真实 follower，不要直接 import LeIsaac 或 LeRobot 到 Isaac 进程。
 ```
 
 ## 注意事项
