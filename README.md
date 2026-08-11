@@ -2,27 +2,6 @@
 
 当前分支是 `stage_2_2`：在第二阶段键盘遥操作基础上，提供单相机高频默认遥操作和双相机可选运行。
 
-## 后续开发上下文
-
-如果后续对话上下文不足，先阅读这些文件再继续开发：
-
-- [AGENTS.md](/home/a/lwh_code/lwh_robot_learning/AGENTS.md)：项目硬性边界和 Codex 接手规则。
-- [project_context.md](/home/a/lwh_code/lwh_robot_learning/docs/project_context.md)：项目总目标、目录结构、运行环境、任务和相机配置。
-- [stage_status.md](/home/a/lwh_code/lwh_robot_learning/docs/stage_status.md)：六个阶段的目标、完成状态、启动方式和下一步。
-- [decision_log.md](/home/a/lwh_code/lwh_robot_learning/docs/decision_log.md)：已经做过的关键技术决策及原因。
-- [handoff.md](/home/a/lwh_code/lwh_robot_learning/docs/handoff.md)：当前交接状态和新对话启动提示。
-- [compatibility.md](/home/a/lwh_code/lwh_robot_learning/docs/compatibility.md)：Isaac Sim、IsaacLab、LeIsaac、Python、GPU 等版本记录。
-
-策略：
-
-- 渲染和运行参数继续对齐 LeIsaac `LeIsaac-SO101-LiftCube-v0`。
-- `front` 和 `wrist` 相机位置使用本项目之前自定义的位姿。
-- 默认不强制 `quality + FXAA`，先使用 IsaacLab/LeIsaac 默认渲染路径。
-- 遥操作默认关闭额外 ground plane，对齐 LeIsaac 桌面任务的 GUI 性能；任务配置本身仍保留 ground。
-- 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
-
-项目只运行 IsaacLab 仿真，不连接真实机器人，不启动 ROS，不访问串口。
-
 ## 使用方式
 
 进入项目目录：
