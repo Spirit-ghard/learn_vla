@@ -1,6 +1,6 @@
 # LWH Robot Learning
 
-当前分支是 `stage_3`：在 Stage 2.3 遥操作基础上，新增 HDF5 数据录制和 HDF5 到 LeRobotDataset v3 的转换脚本。
+当前分支是 `stage_4`：在 Stage 3 录制和转换基础上，新增 HDF5 轨迹回放和 SO101 Leader 标定检查/导入/重标定入口。
 
 ## 后续开发上下文
 
@@ -14,6 +14,7 @@
 - [compatibility.md](docs/compatibility.md)：Isaac Sim、IsaacLab、LeIsaac、Python、GPU 等版本记录。
 - [portability.md](docs/portability.md)：项目搬迁、内置资产和外部环境变量说明。
 - [stage3_validation.md](docs/stage3_validation.md)：Stage 3 录制和转换验证记录。
+- [stage4_validation.md](docs/stage4_validation.md)：Stage 4 HDF5 回放验证记录。
 
 策略：
 
@@ -24,7 +25,7 @@
 - 遥操作默认使用 `render_interval=2`，目标是 60 Hz 控制和 30 Hz 图像/渲染更新。
 - `--teleop_device so101leader` 只读取真实 leader 串口位置并驱动仿真 follower，不控制真实 follower。
 - SO101 Follower USD 已内置在项目目录：`source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/assets/robots/so101_follower.usd`。
-- Isaac 端只写 HDF5；LeRobotDataset 转换在单独的 LeRobot Python 环境运行。
+- Isaac 端只写/回放 HDF5；LeRobotDataset 转换在单独的 LeRobot Python 环境运行。
 
 项目只运行 IsaacLab 仿真，不启动 ROS，不控制真实机器人。Stage 2.3/3 允许在显式选择
 `so101leader` 时访问真实 leader 串口作为输入设备。
@@ -35,7 +36,7 @@
 
 ```bash
 cd <repo>
-git checkout stage_3
+git checkout stage_4
 ```
 
 启动键盘遥操作，默认单相机高频配置：
@@ -135,6 +136,18 @@ python3 scripts/convert_hdf5_to_lerobot.py \
   --overwrite
 ```
 
+如果 episode 不是用 `N` 正常结束，而是 Ctrl+C/关闭窗口中断结束，HDF5 会标记为
+`success=False`。这种调试数据需要显式转换全部 episode：
+
+```bash
+python3 scripts/convert_hdf5_to_lerobot.py \
+  --input datasets/hdf5/lwh_so101_table_leader.hdf5 \
+  --repo_id lwh/so101_table_leader \
+  --output_dir datasets/lerobot/so101_table_leader \
+  --episodes all \
+  --overwrite
+```
+
 转换脚本默认输出 image 格式，当前本机训练环境可直接加载。如果确认 LeRobot 环境的
 video 解码链路可用，也可以显式输出 video 格式以节省空间：
 
@@ -145,6 +158,38 @@ python3 scripts/convert_hdf5_to_lerobot.py \
   --output_dir datasets/lerobot/so101_table_video \
   --image_format video \
   --overwrite
+```
+
+回放 HDF5 轨迹：
+
+```bash
+python3 scripts/replay_hdf5.py \
+  --task Lwh-SO101-Table-v0 \
+  --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+回放窗口启动后会先加载指定 HDF5 的 episode。按键：
+
+```text
+B / Space 暂停或继续
+N / Right 切到下一个 episode
+P / Left 切到上一个 episode
+R 重新加载当前 episode
+S 暂停时单步回放
+Q / Esc 退出
+```
+
+同一个 HDF5 文件内的 episode 可以用 `N/P/R` 在同一次 IsaacSim 启动中反复加载，
+不用每条轨迹都重启仿真。更换 HDF5 文件仍需要重新启动入口。
+
+自动回放指定 episode：
+
+```bash
+python3 scripts/replay_hdf5.py \
+  --task Lwh-SO101-Table-v0 \
+  --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5 \
+  --episode 0 \
+  --autoplay
 ```
 
 按键：
@@ -238,6 +283,37 @@ Leader 串口相关参数：
 --leader_keep_torque      不在连接时关闭 leader 扭矩
 --leader_skip_handshake   跳过电机 ping 检查
 ```
+
+查看当前 leader 标定文件来源：
+
+```bash
+python3 scripts/calibrate_so101_leader.py --inspect
+```
+
+当前仓库默认使用：
+
+```text
+configs/so101_leader_calibration.json
+```
+
+该文件是从本机 LeIsaac cache 复制进项目的：
+
+```text
+/home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json
+```
+
+它已经内置到仓库，正式遥操作和录制会优先使用项目内置文件，不依赖外部 LeIsaac 安装。
+如果需要用 LeRobot 重新标定 leader，只在 LeRobot 环境中运行：
+
+```bash
+conda activate lerobot05
+python3 scripts/calibrate_so101_leader.py \
+  --calibrate \
+  --port /dev/ttyACM0 \
+  --output configs/so101_leader_calibration.json
+```
+
+这个标定入口只连接 SO101 Leader 输入臂，不连接也不控制真实 follower。
 
 如果需要查看完整地面：
 

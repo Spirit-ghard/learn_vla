@@ -13,13 +13,13 @@
 | `stage_2_2` | 第二阶段键盘遥操作封存版 | 已完成，支持单/双相机和 ground 性能 profile |
 | `stage_2_3` | 第二阶段真实 Leader 版 | 已完成，新增真实 SO101 Leader 输入控制仿真 |
 | `stage_3` | 第三阶段数据录制 | 已完成，HDF5 录制和 HDF5 到 LeRobotDataset v3 转换 |
+| `stage_4` | 第四阶段数据回放 | 已完成，HDF5 轨迹回放和 SO101 Leader 标定工具 |
 
 已删除本地历史分支：
 
 ```text
 dev_1
 dev_2
-stage_4
 stage_5
 stage_6
 ```
@@ -302,23 +302,88 @@ docs/stage3_validation.md
 
 ## Stage 4：数据回放
 
-状态：未开始。
+状态：已完成。
+
+对应分支：
+
+```text
+stage_4
+```
 
 目标：
 
-- 新增独立回放入口，例如 `scripts/replay_hdf5.py`。
-- 读取指定 HDF5 episode。
-- 尽量恢复录制初始状态。
-- 按原始频率逐帧应用 action。
-- 支持选择 episode、暂停、继续、退出。
+- 新增独立回放入口 `scripts/replay_hdf5.py`。
+- 读取 Stage 3 HDF5 中指定 episode。
+- 使用 HDF5 内保存的 `initial_state` 调用 `env.reset_to(...)` 恢复录制初始状态。
+- 按 HDF5 `timestamp` 原始频率逐帧应用 action。
+- 支持在同一次 IsaacSim 启动内选择 episode、暂停、继续、单步、退出。
 - 用于验证数据正确性，不依赖模型。
 
-需要验证：
+关键文件：
 
-- 机器人轨迹可重复。
-- 方块状态合理。
-- 相机画面随动作变化且不空白。
-- pause/resume/quit 可用。
+```text
+scripts/replay_hdf5.py
+scripts/validate_replay_hdf5.py
+scripts/calibrate_so101_leader.py
+source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/devices/so101_leader.py
+```
+
+正式回放：
+
+```bash
+python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+自动回放：
+
+```bash
+python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5 --episode 0 --autoplay
+```
+
+回放按键：
+
+```text
+B / Space 暂停或继续
+N / Right 切到下一个 episode
+P / Left 切到上一个 episode
+R 重新加载当前 episode
+S 暂停时单步回放
+Q / Esc 退出
+```
+
+标定工具：
+
+```bash
+python3 scripts/calibrate_so101_leader.py --inspect
+conda activate lerobot05
+python3 scripts/calibrate_so101_leader.py --calibrate --port /dev/ttyACM0 --output configs/so101_leader_calibration.json
+```
+
+当前标定来源：
+
+```text
+configs/so101_leader_calibration.json
+```
+
+该文件和本机 LeIsaac cache 完全一致：
+
+```text
+/home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json
+```
+
+验证过的内容：
+
+- 已检查 `datasets/hdf5/lwh_so101_table_leader.hdf5`，包含 1 条有效 leader episode，`1184` 帧，6D joint position action，单前视相机。
+- 该 episode 当前标记为 `success=False`、`outcome=interrupted`，说明录制结束不是 `N` 成功结束；转换调试数据需使用 `--episodes all`。
+- 已转换为 `datasets/lerobot/so101_table_leader`，LeRobotDataset 可加载 `1179` 帧，`observation.state/action` 为 6 维，`observation.images.front` 为 `3 x 480 x 640`。
+- headless 回放验证通过：回放 90 帧，关节误差 `0.0`，方块位置误差 `0.0`，相机非空白。
+- GUI 回放启动验证通过：窗口模式可创建环境、注册回放按键、加载 HDF5 episode 并回放。
+
+记录：
+
+```text
+docs/stage4_validation.md
+```
 
 ## Stage 5：LeRobot 转换与训练
 

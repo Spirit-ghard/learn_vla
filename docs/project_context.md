@@ -33,13 +33,13 @@ Lwh-SO101-Table-v0
 当前最新分支：
 
 ```text
-stage_3
+stage_4
 ```
 
 当前最新提交：
 
 ```text
-stage 3: add hdf5 recording and lerobot conversion
+stage 4: 完成 HDF5 回放与 leader 标定工具
 ```
 
 `main` 暂未更新到本地最新阶段分支。
@@ -69,9 +69,12 @@ scripts/
   teleop.py
   record_hdf5.py
   convert_hdf5_to_lerobot.py
+  replay_hdf5.py
+  calibrate_so101_leader.py
   validate_env.py
   validate_teleop.py
   validate_record_hdf5.py
+  validate_replay_hdf5.py
 
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/
   __init__.py
@@ -296,6 +299,81 @@ Ctrl+C 安全关闭；活动 episode 标记 interrupted/failure
 当前本机 LeRobot 0.5.1 可写出 video dataset，但默认 torchcodec 读取因 FFmpeg 动态库链路失败；
 显式 `video_backend="pyav"` 可读。第一版正式转换默认使用 image 格式，保证训练端直接可加载。
 
+## Stage 4 数据回放
+
+Isaac 端回放入口：
+
+```text
+scripts/replay_hdf5.py
+```
+
+内部流程：
+
+- 启动 IsaacSim/IsaacLab。
+- 按 HDF5 metadata 或 action 维度自动选择 `keyboard` 或 `so101leader` 动作空间。
+- 按 HDF5 camera keys 自动选择 `front` 或 `dual` 相机配置。
+- 读取 episode 的 `initial_state`，用 `env.reset_to(initial_state, None, is_relative=True)` 恢复录制初始状态。
+- 按 `timestamp` 间隔逐帧执行 `env.step(action)`。
+- 可选验证运行时关节、方块位置和相机非空白。
+
+正式启动：
+
+```bash
+python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+按键：
+
+```text
+B / Space 暂停或继续
+N / Right 下一个 episode
+P / Left 上一个 episode
+R 重载当前 episode
+S 暂停时单步
+Q / Esc 退出
+```
+
+同一个 HDF5 文件内的 episode 可在同一次 IsaacSim 启动中切换；更换 HDF5 文件仍需重新启动入口。
+
+## SO101 Leader 标定
+
+标定检查/导入/重标定入口：
+
+```text
+scripts/calibrate_so101_leader.py
+```
+
+当前项目默认标定文件：
+
+```text
+configs/so101_leader_calibration.json
+```
+
+该文件是从本机 LeIsaac cache 复制进入项目的，和以下文件内容一致：
+
+```text
+/home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json
+```
+
+运行时解析顺序：
+
+```text
+1. --leader_calibration
+2. LWH_SO101_LEADER_CALIBRATION
+3. configs/so101_leader_calibration.json
+4. LeRobot cache: teleoperators/so_leader/{leader_id}.json
+5. LeRobot cache: teleoperators/so101_leader/{leader_id}.json
+6. LeIsaac cache: .../.cache/so101_leader.json
+```
+
+当前 LeRobot cache 下也存在：
+
+```text
+/home/a/.cache/huggingface/lerobot/calibration/teleoperators/so101_leader/my_awesome_leader_arm.json
+```
+
+但它和项目当前使用的标定文件不一致。正式 teleop/record 优先使用项目内置 `configs` 文件。
+
 ## 相机配置
 
 当前 `front`：
@@ -371,6 +449,18 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --leader_start_immediately
 ```
 
+Stage 4 HDF5 回放：
+
+```bash
+python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+
+检查 leader 标定来源：
+
+```bash
+python3 scripts/calibrate_so101_leader.py --inspect
+```
+
 恢复完整 ground：
 
 ```bash
@@ -419,6 +509,12 @@ python3 scripts/validate_teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --came
 python3 scripts/validate_teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode front --ground_mode on
 ```
 
+Stage 4 回放验证：
+
+```bash
+python3 scripts/validate_replay_hdf5.py --headless --device cuda
+```
+
 验证后清理：
 
 ```bash
@@ -444,10 +540,10 @@ Stage 3 数据录制：
 
 Stage 4 回放：
 
-- 读取 HDF5 指定 episode。
-- 尽量重置到录制初始状态。
-- 按原始频率逐帧应用 action。
-- 支持 episode 选择、暂停、继续、退出。
+- 已完成 HDF5 指定 episode 回放。
+- 已使用 `initial_state` 恢复录制初始状态。
+- 已按原始 timestamp 逐帧应用 action。
+- 已支持 episode 选择、暂停、继续、单步、退出。
 
 Stage 5 LeRobot 转换与训练：
 

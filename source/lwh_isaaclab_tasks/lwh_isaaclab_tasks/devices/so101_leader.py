@@ -24,7 +24,10 @@ DEFAULT_PROJECT_LEADER_CALIBRATION = PROJECT_ROOT / "configs/so101_leader_calibr
 DEFAULT_LEISAAC_LEADER_CALIBRATION = (
     Path.home() / ".local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json"
 )
-DEFAULT_LEROBOT_CALIBRATION_ROOT = Path.home() / ".cache/huggingface/lerobot/calibration/teleoperators/so_leader"
+DEFAULT_LEROBOT_CALIBRATION_ROOTS = (
+    Path.home() / ".cache/huggingface/lerobot/calibration/teleoperators/so_leader",
+    Path.home() / ".cache/huggingface/lerobot/calibration/teleoperators/so101_leader",
+)
 
 PRESENT_POSITION_ADDR = 56
 PRESENT_POSITION_LEN = 2
@@ -330,12 +333,13 @@ def resolve_leader_calibration_path(path: str | None, leader_id: str | None = No
     if DEFAULT_PROJECT_LEADER_CALIBRATION.is_file():
         return DEFAULT_PROJECT_LEADER_CALIBRATION
     if leader_id:
-        lerobot_path = DEFAULT_LEROBOT_CALIBRATION_ROOT / f"{leader_id}.json"
-        if lerobot_path.is_file():
-            return lerobot_path
+        for root in DEFAULT_LEROBOT_CALIBRATION_ROOTS:
+            lerobot_path = root / f"{leader_id}.json"
+            if lerobot_path.is_file():
+                return lerobot_path
     if DEFAULT_LEISAAC_LEADER_CALIBRATION.is_file():
         return DEFAULT_LEISAAC_LEADER_CALIBRATION
-    return DEFAULT_LEROBOT_CALIBRATION_ROOT / f"{leader_id or 'so101_leader'}.json"
+    return DEFAULT_LEROBOT_CALIBRATION_ROOTS[0] / f"{leader_id or 'so101_leader'}.json"
 
 
 def normalized_positions_to_sim_radians(normalized_positions: dict[str, float]) -> np.ndarray:

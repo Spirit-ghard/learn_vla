@@ -258,6 +258,54 @@
 - 后续训练可以先使用 image 格式数据集，避免 video decoder 阻塞训练验证。
 - 需要节省磁盘时可显式转换 `--image_format video`，并在 LeRobot 加载/训练配置中指定 `pyav` 或修复 torchcodec/FFmpeg。
 
+## 2026-08-11：Stage 4 使用 HDF5 initial_state 回放
+
+决策：
+
+- 新增 `scripts/replay_hdf5.py`，独立于任务配置和录制逻辑。
+- 读取 Stage 3 HDF5 的 `/data/demo_N/initial_state`。
+- 用 IsaacLab `env.reset_to(initial_state, None, is_relative=True)` 恢复录制初始状态。
+- 按 HDF5 `timestamp` 的原始间隔逐帧执行 `env.step(action)`。
+- 同一个 HDF5 文件内的 episode 用键盘 `N/P/R` 切换或重载，避免每条轨迹都重启 IsaacSim。
+
+原因：
+
+- IsaacLab 官方 replay demo 和 LeIsaac replay 都以 HDF5 初始状态 + action replay 作为数据正确性验证路径。
+- 回放不依赖模型，目标是先验证 HDF5 的机器人轨迹、方块状态和相机画面是否可复现。
+- 录制和回放入口分离，保持任务模块只定义环境。
+
+影响：
+
+- 当前回放自动根据 HDF5 metadata/action 维度选择 `keyboard` 或 `so101leader` 动作空间。
+- 当前回放自动根据 HDF5 camera keys 选择 `front` 或 `dual` 相机配置。
+- 更换 HDF5 文件仍需重新启动入口；同一文件内 episode 可以在 GUI 中切换。
+
+## 2026-08-11：SO101 Leader 标定文件内置并提供独立标定入口
+
+决策：
+
+- 当前默认标定文件为 `configs/so101_leader_calibration.json`。
+- 该文件从本机 LeIsaac cache 复制进入项目，内容与以下文件一致：
+
+```text
+/home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json
+```
+
+- 新增 `scripts/calibrate_so101_leader.py`，用于检查解析来源、导入已有 JSON、或在 LeRobot 环境中重新标定 SO101 Leader。
+- 运行时解析顺序为：`--leader_calibration`、`LWH_SO101_LEADER_CALIBRATION`、项目 `configs`、LeRobot cache、LeIsaac cache。
+
+原因：
+
+- 用户要求项目目录搬迁到装好环境的机器后仍可使用，不能依赖本机 LeIsaac 安装目录。
+- Stage 2.3/3 需要读取真实 leader，但不能控制真实 follower；标定程序必须只面向 leader 输入设备。
+- 本机 LeRobot cache 下存在 `teleoperators/so101_leader/my_awesome_leader_arm.json`，但它和当前项目内置标定不一致；正式运行应优先使用项目内置标定，避免隐式切换行为。
+
+影响：
+
+- `teleop.py` 和 `record_hdf5.py` 不传 `--leader_calibration` 时优先使用项目内置标定。
+- 重新标定应在 LeRobot Python 环境中执行，不在 IsaacSim 进程内 import LeRobot。
+- 标定入口会连接 SO101 Leader 串口并写 leader 电机校准，不连接、不控制真实 follower。
+
 ## 术语说明：Wall loop Hz 和 Control segment Hz
 
 `Wall loop Hz`：
