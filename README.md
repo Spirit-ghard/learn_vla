@@ -16,29 +16,29 @@
 
 ## 使用方式
 
-进入项目目录：
+进入项目目录并切到本分支：
 
 ```bash
 cd /home/a/lwh_code/lwh_robot_learning
+git checkout stage_1
 ```
 
-打开 Isaac Sim GUI 并持续运行场景：
+启动场景：
 
 ```bash
 python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
 ```
 
-也可以省略参数，默认就是同一个任务和单环境：
+退出方式：关闭 Isaac Sim 窗口，或在终端按 `Ctrl+C`。
 
-```bash
-python3 scripts/run_env.py
-```
+## 参数说明
 
-退出方式：
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `--task` | `Lwh-SO101-Table-v0` | 要启动的 Gym task id。 |
+| `--num_envs` | `1` | 同时创建的仿真环境数量；当前场景调试建议保持 1。 |
+| `--device` | IsaacLab 默认 | 仿真设备，例如 `cuda` 或 `cpu`。 |
+| `--headless` | `False` | 无 GUI 运行，通常只用于内部验证。 |
 
-```text
-关闭 Isaac Sim 窗口，或在终端按 Ctrl+C。
-```
-
-运行入口会自动切换到固定的 IsaacLab Python 环境，并清理继承自 ROS 或真实机器人工程的
+运行入口会自动切换到 IsaacLab/Isaac Sim 运行环境，并清理继承自 ROS 或真实机器人工程的
 Python/动态库路径，保证这里只运行仿真。
