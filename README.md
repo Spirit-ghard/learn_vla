@@ -46,6 +46,19 @@ Ctrl+C 或关闭窗口退出
 | `--teleop_rendering_mode` | 未设置 | 可选覆盖 IsaacLab 渲染 preset：`performance`、`balanced`、`quality`。 |
 | `--quality` | `False` | 画质检查开关，会使用更重的渲染 preset。 |
 
+## 标定工具
+
+本分支的遥操作入口不访问串口；标定脚本仅作为后续接入 SO101 leader/follower 时的辅助工具。
+
+常用检查命令：
+
+```bash
+python3 scripts/calibrate_so101.py --arm leader --inspect
+python3 scripts/calibrate_so101.py --arm follower --inspect
+```
+
+重新标定必须显式添加 `--calibrate` 并在 LeRobot 环境中运行。只有 `--arm follower --calibrate` 会连接真实 follower，普通遥操作流程不会调用它。
+
 ## 数据契约
 
 ```text
