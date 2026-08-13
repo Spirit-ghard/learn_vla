@@ -40,3 +40,16 @@ python3 scripts/run_env.py --task Lwh-SO101-Table-v0 --num_envs 1
 
 运行入口会自动切换到 IsaacLab/Isaac Sim 运行环境，并清理继承自 ROS 或真实机器人工程的
 Python/动态库路径，保证这里只运行仿真。
+
+## 标定工具
+
+本阶段默认不访问串口，但仓库从 stage_1 起提供 SO101 标定辅助脚本，方便后续 leader/follower
+接入时使用同一套 LeRobot 标定文件格式。
+
+```bash
+python3 scripts/calibrate_so101.py --arm leader --inspect
+python3 scripts/calibrate_so101.py --arm follower --inspect
+```
+
+如需重新标定，必须在 LeRobot 环境中显式运行 `--calibrate`；只有
+`--arm follower --calibrate` 会连接真实 follower。
