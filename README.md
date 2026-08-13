@@ -61,6 +61,19 @@ Ctrl+C 或关闭窗口退出
 | `--leader_keep_torque` | `False` | 不在连接时关闭 leader 扭矩。 |
 | `--leader_skip_handshake` | `False` | 跳过电机 ping 检查。 |
 
+## 标定工具
+
+Leader 模式会读取 leader 标定文件；普通键盘遥操作不访问串口，也不会控制真实 follower。
+
+常用检查命令：
+
+```bash
+python3 scripts/calibrate_so101.py --arm leader --inspect
+python3 scripts/calibrate_so101.py --arm follower --inspect
+```
+
+重新标定必须显式添加 `--calibrate` 并在 LeRobot 环境中运行。`--arm leader --calibrate` 只处理 leader 输入臂；只有 `--arm follower --calibrate` 会连接真实 follower，仿真遥操作入口不会自动调用它。
+
 ## 数据契约
 
 ```text
