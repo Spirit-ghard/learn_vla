@@ -1,8 +1,7 @@
-# LWH Robot Learning
+# HZ Robot Learning
+# 能不能做成--record来使用录制？    同时ctrl+c中断的数据废弃掉？
+## 当前分支是 `stage_3`：双相机 + 键盘/leader控制 + HDF5录制 + LeRobotDataset v3 的转换脚本。
 
-当前分支是 `stage_3`：在 Stage 2.3 遥操作基础上，新增 HDF5 数据录制和 HDF5 到 LeRobotDataset v3 的转换脚本。
-
-项目只运行 IsaacLab 仿真，不控制真实 follower，不启动 ROS。`--teleop_device so101leader` 只读取真实 SO101 Leader 作为仿真输入。
 
 ## 使用方式
 
@@ -13,7 +12,7 @@ cd /home/a/lwh_code/lwh_robot_learning
 git checkout stage_3
 ```
 
-常用采集流程：先遥操作确认手感，再录制 HDF5，最后在 LeRobot 环境中转换数据。
+常用采集流程：
 
 ```bash
 python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1
