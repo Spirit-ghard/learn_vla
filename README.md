@@ -1,8 +1,7 @@
-# LWH Robot Learning
+# HZ Robot Learning
 
-当前分支是 `stage_2_3`：在第二阶段键盘遥操作基础上，新增真实 SO101 Leader 作为仿真遥操作输入。
+## 当前分支是 `stage_2_3`：键盘+双相机+键盘/leader控制
 
-项目只运行 IsaacLab 仿真，不控制真实 follower，不启动 ROS。`--teleop_device so101leader` 只读取真实 leader，不控制真实 follower。
 
 ## 使用方式
 
