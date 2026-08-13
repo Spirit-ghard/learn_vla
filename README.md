@@ -58,6 +58,19 @@ Ctrl+C 安全关闭文件；未用 R/N 结束的当前 episode 会被废弃
 | `--leader_calibration` | 未设置 | 显式 leader 标定 JSON；不传时走项目默认解析顺序。 |
 | `--leader_start_immediately` | `False` | Leader 模式启动后不等待 `B`，直接跟随 leader。 |
 
+## 标定工具
+
+Leader 录制会读取 leader 标定文件；键盘录制不访问串口，也不会控制真实 follower。
+
+常用检查命令：
+
+```bash
+python3 scripts/calibrate_so101.py --arm leader --inspect
+python3 scripts/calibrate_so101.py --arm follower --inspect
+```
+
+重新标定必须显式添加 `--calibrate` 并在 LeRobot 环境中运行。`--arm leader --calibrate` 只处理 leader 输入臂；只有 `--arm follower --calibrate` 会连接真实 follower，录制和仿真遥操作入口不会自动调用它。
+
 ## 录制参数
 
 | 参数 | 默认值 | 作用 |
