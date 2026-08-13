@@ -1,4 +1,4 @@
-# LWH Robot Learning
+# HZ Robot Learning
 
 当前分支是 `stage_2_1`：第二阶段键盘遥操作入口。
 
