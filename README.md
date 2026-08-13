@@ -1,7 +1,5 @@
-# LWH Robot Learning
-
-当前分支只包含第一阶段：基于 IsaacLab 的 SO101 桌面仿真场景。
-
+# HZ Robot Learning
+## Phase 1 ：基于 IsaacLab 的 SO101 桌面仿真场景。
 场景内容：
 
 - SO101 Follower
