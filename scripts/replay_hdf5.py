@@ -58,9 +58,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--camera_mode",
-        default="auto",
+        default="dual",
         choices=["auto", "front", "dual"],
-        help="Camera set. auto follows the camera keys stored in the HDF5 file.",
+        help="Camera set. dual is the replay default so front+wrist can be inspected together.",
+    )
+    parser.add_argument(
+        "--viewer_layout",
+        default="tri",
+        choices=["tri", "isaac"],
+        help="GUI replay view. tri shows front+wrist on the top row and the main view on the bottom row.",
     )
     parser.add_argument(
         "--ground_mode",
@@ -120,6 +126,7 @@ import gymnasium as gym  # noqa: E402
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+import omni.ui as ui  # noqa: E402
 
 import lwh_isaaclab_tasks  # noqa: E402,F401
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
@@ -167,6 +174,94 @@ def get_nested_dataset(group: h5py.Group, path: str) -> h5py.Dataset:
     if not isinstance(current, h5py.Dataset):
         raise TypeError(f"HDF5 path is not a dataset: {path}")
     return current
+
+
+def rgb_tensor_to_numpy(value: torch.Tensor | np.ndarray | None, *, fallback_shape: tuple[int, int, int]) -> np.ndarray:
+    """把 IsaacLab 相机张量转为 UI 可显示的 uint8 HWC 图像。"""
+    if value is None:
+        return np.zeros(fallback_shape, dtype=np.uint8)
+    if isinstance(value, torch.Tensor):
+        array = value.detach().cpu().numpy()
+    else:
+        array = np.asarray(value)
+    if array.ndim == 4 and array.shape[0] == 1:
+        array = array[0]
+    if array.ndim == 3 and array.shape[0] in (3, 4):
+        array = np.moveaxis(array, 0, -1)
+    if array.ndim != 3 or array.shape[-1] < 3:
+        return np.zeros(fallback_shape, dtype=np.uint8)
+    rgb = array[..., :3]
+    if rgb.dtype != np.uint8:
+        rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(rgb)
+
+
+class ReplayTriView:
+    """回放专用三画面窗口：上排双相机，下排主视角。"""
+
+    def __init__(self, *, width: int = 1280, height: int = 920) -> None:
+        self._providers = {
+            "front": ui.ByteImageProvider(),
+            "wrist": ui.ByteImageProvider(),
+            "main": ui.ByteImageProvider(),
+        }
+        self._fallback = np.zeros((480, 640, 3), dtype=np.uint8)
+        self._window = ui.Window(
+            "LWH Replay View",
+            width=width,
+            height=height,
+            visible=True,
+            dock_preference=ui.DockPreference.LEFT_BOTTOM,
+        )
+        with self._window.frame:
+            with ui.VStack(spacing=4):
+                # 上排固定约 40% 高度，用于检查训练数据中的 front/wrist 传感器画面。
+                with ui.HStack(height=ui.Percent(40), spacing=4):
+                    self._build_image_cell("Front", self._providers["front"])
+                    self._build_image_cell("Wrist", self._providers["wrist"])
+                # 下排显示 Isaac viewer 主视角，便于同时确认机器人、桌面和方块全局轨迹。
+                self._build_image_cell("Main View", self._providers["main"], height=ui.Percent(60))
+        self.update(front=None, wrist=None, main=None)
+
+    @staticmethod
+    def _build_image_cell(label: str, provider: ui.ByteImageProvider, *, height=None) -> None:
+        with ui.ZStack(height=height or ui.Fraction(1)):
+            ui.Rectangle(style={"background_color": 0xFF101010})
+            ui.ImageWithProvider(
+                provider,
+                width=ui.Fraction(1),
+                height=ui.Fraction(1),
+            )
+            with ui.VStack():
+                ui.Label(
+                    label,
+                    height=24,
+                    alignment=ui.Alignment.LEFT_TOP,
+                    style={"color": 0xFFE8E8E8, "background_color": 0xAA000000, "margin": 4},
+                )
+                ui.Spacer()
+
+    def update(
+        self,
+        *,
+        front: torch.Tensor | np.ndarray | None,
+        wrist: torch.Tensor | np.ndarray | None,
+        main: torch.Tensor | np.ndarray | None,
+    ) -> None:
+        for name, image in {
+            "front": front,
+            "wrist": wrist,
+            "main": main,
+        }.items():
+            rgb = rgb_tensor_to_numpy(image, fallback_shape=self._fallback.shape)
+            rgba = np.dstack((rgb, np.full(rgb.shape[:2] + (1,), 255, dtype=np.uint8)))
+            self._providers[name].set_bytes_data(rgba.flatten().data, [rgb.shape[1], rgb.shape[0]])
+
+    def close(self) -> None:
+        if self._window is not None:
+            self._window.visible = False
+            self._window.destroy()
+            self._window = None
 
 
 class HDF5ReplayFile:
@@ -364,12 +459,32 @@ def resolve_episode_order(dataset: HDF5ReplayFile) -> list[int]:
     return list(range(dataset.episode_count))
 
 
-def load_episode(env, dataset: HDF5ReplayFile, episode_index: int) -> EpisodePlayback:
+def render_main_view(env) -> np.ndarray | None:
+    """读取 Isaac viewer 主视角；普通 viewport 仍由 env.sim.render() 刷新。"""
+    try:
+        return env.render(recompute=True)
+    except RuntimeError as exc:
+        print(f"[WARN] Main replay view unavailable: {exc}", flush=True)
+        return None
+
+
+def update_replay_view(view: ReplayTriView | None, env, observations: dict[str, Any] | None) -> None:
+    if view is None:
+        return
+    policy_obs = observations.get("policy", {}) if observations is not None else {}
+    view.update(
+        front=policy_obs.get("front"),
+        wrist=policy_obs.get("wrist"),
+        main=render_main_view(env),
+    )
+
+
+def load_episode(env, dataset: HDF5ReplayFile, episode_index: int) -> tuple[EpisodePlayback, dict[str, Any]]:
     group = dataset.episode_group(episode_index)
     if "initial_state" not in group:
         raise KeyError(f"Episode {episode_index} has no initial_state group.")
     initial_state = read_nested_tensor_tree(group["initial_state"], env.device)
-    env.reset_to(initial_state, None, is_relative=True)
+    observations, _ = env.reset_to(initial_state, None, is_relative=True)
     env.sim.render()
     actions = get_nested_dataset(group, args_cli.action_key)
     timestamps = np.asarray(group["timestamp"][:], dtype=np.float64) if "timestamp" in group else np.array([])
@@ -381,7 +496,7 @@ def load_episode(env, dataset: HDF5ReplayFile, episode_index: int) -> EpisodePla
         f"frames={actions.shape[0]}",
         flush=True,
     )
-    return EpisodePlayback(episode_index=episode_index, group=group, actions=actions, timestamps=timestamps)
+    return EpisodePlayback(episode_index=episode_index, group=group, actions=actions, timestamps=timestamps), observations
 
 
 def sleep_with_render(env, duration_s: float) -> None:
@@ -398,6 +513,7 @@ def sleep_with_render(env, duration_s: float) -> None:
 def main() -> None:
     dataset = HDF5ReplayFile(args_cli.dataset_file)
     controls: ReplayKeyboard | None = None
+    replay_view: ReplayTriView | None = None
     env = None
     interrupted = False
 
@@ -430,25 +546,29 @@ def main() -> None:
         if hasattr(env_cfg.terminations, "time_out"):
             env_cfg.terminations.time_out = None
 
-        env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
-        env.reset()
+        render_mode = "rgb_array" if (not args_cli.headless and args_cli.viewer_layout == "tri") else None
+        env = gym.make(args_cli.task, cfg=env_cfg, render_mode=render_mode).unwrapped
+        observations, _ = env.reset()
         episode_order = resolve_episode_order(dataset)
         if args_cli.episode in episode_order:
             order_pos = episode_order.index(args_cli.episode)
         else:
             order_pos = 0
-        episode = load_episode(env, dataset, episode_order[order_pos])
+        episode, observations = load_episode(env, dataset, episode_order[order_pos])
         verifier = ReplayVerifier()
 
         if not args_cli.headless:
             controls = ReplayKeyboard(paused=not args_cli.autoplay)
             controls.display_controls()
+            if args_cli.viewer_layout == "tri":
+                replay_view = ReplayTriView()
+                update_replay_view(replay_view, env, observations)
         paused = not args_cli.autoplay
         total_replayed_frames = 0
         print(
             f"LWH_REPLAY_READY dataset={args_cli.dataset_file} task={args_cli.task} "
             f"teleop_device={teleop_device} camera_mode={camera_mode} "
-            f"episodes={episode_order} autoplay={args_cli.autoplay}",
+            f"episodes={episode_order} autoplay={args_cli.autoplay} viewer_layout={args_cli.viewer_layout}",
             flush=True,
         )
 
@@ -463,19 +583,22 @@ def main() -> None:
                             paused = True
                             controls.single_step_requested = True
                         elif command == "restart":
-                            episode = load_episode(env, dataset, episode_order[order_pos])
+                            episode, observations = load_episode(env, dataset, episode_order[order_pos])
                             verifier = ReplayVerifier()
                             paused = True
+                            update_replay_view(replay_view, env, observations)
                         elif command == "next":
                             order_pos = (order_pos + 1) % len(episode_order)
-                            episode = load_episode(env, dataset, episode_order[order_pos])
+                            episode, observations = load_episode(env, dataset, episode_order[order_pos])
                             verifier = ReplayVerifier()
                             paused = True
+                            update_replay_view(replay_view, env, observations)
                         elif command == "previous":
                             order_pos = (order_pos - 1) % len(episode_order)
-                            episode = load_episode(env, dataset, episode_order[order_pos])
+                            episode, observations = load_episode(env, dataset, episode_order[order_pos])
                             verifier = ReplayVerifier()
                             paused = True
+                            update_replay_view(replay_view, env, observations)
                         elif command == "quit":
                             interrupted = True
 
@@ -484,6 +607,7 @@ def main() -> None:
 
                 if paused and not (controls and controls.single_step_requested):
                     env.sim.render()
+                    update_replay_view(replay_view, env, observations)
                     time.sleep(0.01)
                     continue
 
@@ -495,9 +619,10 @@ def main() -> None:
                     )
                     if args_cli.loop:
                         order_pos = (order_pos + 1) % len(episode_order)
-                        episode = load_episode(env, dataset, episode_order[order_pos])
+                        episode, observations = load_episode(env, dataset, episode_order[order_pos])
                         verifier = ReplayVerifier()
                         paused = not args_cli.autoplay
+                        update_replay_view(replay_view, env, observations)
                         continue
                     break
 
@@ -517,6 +642,7 @@ def main() -> None:
                 observations, _, _, _, _ = env.step(action)
                 if args_cli.verify or VALIDATION_MODE:
                     verifier.update(env, episode, observations)
+                update_replay_view(replay_view, env, observations)
                 episode.frame += 1
                 total_replayed_frames += 1
                 if controls is not None:
@@ -550,6 +676,8 @@ def main() -> None:
         signal.signal(signal.SIGINT, previous_sigint_handler)
         if controls is not None:
             controls.close()
+        if replay_view is not None:
+            replay_view.close()
         if env is not None:
             env.close()
         dataset.close()

@@ -16,8 +16,16 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "artifacts/stage3/record_validation.hdf5"
 def main() -> None:
     # 该验证只向 Isaac GUI 注入 Carb 键盘事件，不访问真实 leader/follower 设备。
     os.environ["LWH_RECORD_HDF5_VALIDATION"] = "1"
-    record_script = SCRIPT_DIR / "record_hdf5.py"
-    args = [sys.executable, str(record_script), "--output", str(DEFAULT_OUTPUT), "--overwrite", *sys.argv[1:]]
+    teleop_script = SCRIPT_DIR / "teleop.py"
+    args = [
+        sys.executable,
+        str(teleop_script),
+        "--record",
+        "--output",
+        str(DEFAULT_OUTPUT),
+        "--overwrite",
+        *sys.argv[1:],
+    ]
     os.execv(sys.executable, args)
 
 

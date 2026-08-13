@@ -13,7 +13,7 @@
 | `stage_2_2` | 第二阶段键盘遥操作封存版 | 已完成，支持单/双相机和 ground 性能 profile |
 | `stage_2_3` | 第二阶段真实 Leader 版 | 已完成，新增真实 SO101 Leader 输入控制仿真 |
 | `stage_3` | 第三阶段数据录制 | 已完成，HDF5 录制和 HDF5 到 LeRobotDataset v3 转换 |
-| `stage_4` | 第四阶段数据回放 | 已完成，HDF5 轨迹回放和 SO101 Leader 标定工具 |
+| `stage_4` | 第四阶段数据回放 | 已完成，HDF5 轨迹回放、三画面回放视图和 SO101 标定工具 |
 
 已删除本地历史分支：
 
@@ -212,7 +212,8 @@ stage_3
 
 目标：
 
-- 新增独立录制入口 `scripts/record_hdf5.py`。
+- 新增正式录制入口 `scripts/teleop.py --record`。
+- 底层 HDF5 写入逻辑保留在 `scripts/record_hdf5.py`，由正式入口复用。
 - 不把录制逻辑写入任务配置文件。
 - 初期优先写 HDF5，降低 IsaacLab 运行环境中的 LeRobot 依赖耦合。
 - 参考 LeIsaac 的 HDF5 recorder/teleop 流程，但不直接 import LeIsaac。
@@ -222,6 +223,7 @@ stage_3
 关键文件：
 
 ```text
+scripts/teleop.py
 scripts/record_hdf5.py
 scripts/convert_hdf5_to_lerobot.py
 scripts/validate_record_hdf5.py
@@ -230,10 +232,11 @@ scripts/validate_record_hdf5.py
 正式录制：
 
 ```bash
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
 ```
+
+常用可调项：`--teleop_device keyboard|so101leader` 选择输入设备，`--camera_mode front|dual`
+选择单/双相机，`--append` 追加到已有 HDF5，`--overwrite` 覆盖已有 HDF5。
 
 正式转换：
 
@@ -268,7 +271,7 @@ episode 生命周期：
 B: 开始操作和录制 episode
 R: 结束当前 episode，标记失败，reset 进入下一 episode
 N: 结束当前 episode，标记成功，reset 进入下一 episode
-Ctrl+C: 安全关闭文件
+Ctrl+C: 安全关闭文件，并废弃未用 R/N 结束的当前 episode
 ```
 
 转换规则：
@@ -317,6 +320,7 @@ stage_4
 - 使用 HDF5 内保存的 `initial_state` 调用 `env.reset_to(...)` 恢复录制初始状态。
 - 按 HDF5 `timestamp` 原始频率逐帧应用 action。
 - 支持在同一次 IsaacSim 启动内选择 episode、暂停、继续、单步、退出。
+- GUI 默认三画面布局：上排 front+wrist，占约 40%；下排主视角。
 - 用于验证数据正确性，不依赖模型。
 
 关键文件：
@@ -324,6 +328,7 @@ stage_4
 ```text
 scripts/replay_hdf5.py
 scripts/validate_replay_hdf5.py
+scripts/calibrate_so101.py
 scripts/calibrate_so101_leader.py
 source/lwh_isaaclab_tasks/lwh_isaaclab_tasks/devices/so101_leader.py
 ```
@@ -354,9 +359,11 @@ Q / Esc 退出
 标定工具：
 
 ```bash
-python3 scripts/calibrate_so101_leader.py --inspect
+python3 scripts/calibrate_so101.py --arm leader --inspect
+python3 scripts/calibrate_so101.py --arm follower --inspect
 conda activate lerobot05
-python3 scripts/calibrate_so101_leader.py --calibrate --port /dev/ttyACM0 --output configs/so101_leader_calibration.json
+python3 scripts/calibrate_so101.py --arm leader --calibrate --port /dev/ttyACM0 --output configs/so101_leader_calibration.json
+python3 scripts/calibrate_so101.py --arm follower --calibrate --port /dev/ttyACM1 --output configs/so101_follower_calibration.json
 ```
 
 当前标定来源：

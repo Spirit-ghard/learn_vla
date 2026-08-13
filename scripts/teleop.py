@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import signal
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -18,6 +19,7 @@ VALIDATION_ENV = "LWH_TELEOP_INPUT_VALIDATION"
 VALIDATION_MODE = os.environ.get(VALIDATION_ENV) == "1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALIDATION_OUTPUT_DIR = PROJECT_ROOT / "artifacts/stage2"
+DEFAULT_RECORD_OUTPUT = PROJECT_ROOT / "datasets/hdf5/lwh_so101_table.hdf5"
 
 
 ensure_isaac_runtime(supervise_validation=VALIDATION_MODE)
@@ -29,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Teleoperate an LWH IsaacLab task with the keyboard.")
     parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Run the same teleoperation session through the HDF5 recorder.",
+    )
     parser.add_argument(
         "--teleop_device",
         default="keyboard",
@@ -71,6 +78,22 @@ def parse_args() -> argparse.Namespace:
         help="Match LeIsaac --quality: set FXAA and the quality rendering preset.",
     )
     parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_RECORD_OUTPUT,
+        help="HDF5 output path used with --record.",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Delete an existing HDF5 file before --record.")
+    parser.add_argument("--append", action="store_true", help="Append episodes to an existing HDF5 file with --record.")
+    parser.add_argument(
+        "--compression",
+        default="lzf",
+        choices=["none", "lzf", "gzip"],
+        help="HDF5 compression used with --record.",
+    )
+    parser.add_argument("--chunk_size", type=int, default=32, help="HDF5 chunk length used with --record.")
+    parser.add_argument("--min_frames", type=int, default=1, help="Minimum episode frames saved by --record.")
+    parser.add_argument(
         "--leader_port",
         default="/dev/ttyACM0",
         help="Serial port for --teleop_device so101leader.",
@@ -107,13 +130,37 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.headless:
         parser.error("Keyboard teleoperation requires a GUI; do not use --headless.")
+    if args.overwrite and args.append:
+        parser.error("--overwrite and --append are mutually exclusive.")
+    if args.chunk_size < 1:
+        parser.error("--chunk_size must be positive.")
+    if args.min_frames < 1:
+        parser.error("--min_frames must be positive.")
+    args.output = args.output.expanduser().resolve()
     args.enable_cameras = True
     if args.rendering_mode is None and args.teleop_rendering_mode is not None:
         args.rendering_mode = args.teleop_rendering_mode
     return args
 
 
+def launch_record_hdf5_entry() -> None:
+    """让 `teleop.py --record` 成为正式入口，同时复用阶段三的 HDF5 录制流程。"""
+    record_script = PROJECT_ROOT / "scripts" / "record_hdf5.py"
+    if not record_script.is_file():
+        raise FileNotFoundError(f"Cannot find HDF5 recorder entry: {record_script}")
+    command = [sys.executable, str(record_script)]
+    for arg in sys.argv[1:]:
+        if arg == "--record":
+            continue
+        command.append(arg)
+    print(f"LWH_TELEOP_RECORD_ENTRY {' '.join(command)}", flush=True)
+    os.execv(sys.executable, command)
+
+
 args_cli = parse_args()
+if args_cli.record:
+    launch_record_hdf5_entry()
+
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 

@@ -220,7 +220,8 @@
 
 决策：
 
-- Stage 3 使用独立 Isaac 入口 `scripts/record_hdf5.py` 录制 HDF5。
+- Stage 3 使用 `scripts/teleop.py --record` 作为正式 Isaac 录制入口。
+- HDF5 写入逻辑仍保留在 `scripts/record_hdf5.py`，由正式入口复用。
 - Stage 3 使用独立 LeRobot 入口 `scripts/convert_hdf5_to_lerobot.py` 转换 LeRobotDataset v3。
 - 暂不在 IsaacLab 仿真环境内直接依赖 LeRobot。
 
@@ -237,6 +238,7 @@
 - HDF5 主结构采用 `/data/demo_N`，同时提供 `/episodes/000000` 硬链接。
 - 每帧写入 `observation/state`、`observation/images/*`、`action`、`timestamp`、`episode_index`、`frame_index`、`task`。
 - episode 按 `B` 开始录制，`R` 标记失败结束，`N` 标记成功结束。
+- Ctrl+C 或窗口关闭会废弃未用 R/N 正式结束的当前 episode，避免 interrupted/failure 脏数据进入数据集。
 - LeRobot 转换默认只转换成功 episode，并跳过前 5 帧。
 
 ## 2026-08-11：LeRobot 转换默认使用 image 格式
@@ -305,6 +307,27 @@
 - `teleop.py` 和 `record_hdf5.py` 不传 `--leader_calibration` 时优先使用项目内置标定。
 - 重新标定应在 LeRobot Python 环境中执行，不在 IsaacSim 进程内 import LeRobot。
 - 标定入口会连接 SO101 Leader 串口并写 leader 电机校准，不连接、不控制真实 follower。
+
+## 2026-08-13：Stage 4 回放三画面视图和通用 SO101 标定
+
+决策：
+
+- `scripts/replay_hdf5.py` 默认使用 `--viewer_layout tri`。
+- 三画面窗口上排显示 `front` 和 `wrist` 传感器画面，占约 40%；下排显示 Isaac viewer 主视角。
+- 回放默认 `--camera_mode dual`，即使录制文件只有 front，也能在回放时同时检查 wrist 传感器视角。
+- 新增 `scripts/calibrate_so101.py --arm leader|follower`，旧 `scripts/calibrate_so101_leader.py` 作为兼容入口。
+
+原因：
+
+- 回放是数据正确性验证，需要同时看训练用相机画面和全局主视角，单一 viewport 不够直观。
+- 标定能力应从 Stage 1 起就是工程能力，不应只绑定 leader。
+- LeRobot 0.5.1 已提供 `SO101LeaderConfig`、`SO101FollowerConfig` 和官方 `calibrate()` 流程，应复用其设备对象和校准文件格式。
+
+影响：
+
+- 回放 GUI 会额外维护一个 `LWH Replay View` 窗口；需要性能更轻时可用 `--viewer_layout isaac`。
+- follower 标定只有用户明确运行 `--arm follower --calibrate` 时才会连接真实 follower；仿真入口仍不控制真实 follower。
+- leader/follower 标定均应在 LeRobot Python 环境中执行，不在 IsaacSim 进程中 import LeRobot。
 
 ## 术语说明：Wall loop Hz 和 Control segment Hz
 

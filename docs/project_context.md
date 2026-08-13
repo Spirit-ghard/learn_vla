@@ -236,8 +236,10 @@ gripper
 Isaac 端录制入口：
 
 ```text
-scripts/record_hdf5.py
+scripts/teleop.py --record
 ```
+
+底层 HDF5 写入逻辑仍在 `scripts/record_hdf5.py`，正式使用优先走 `teleop.py --record`。
 
 LeRobot 转换入口：
 
@@ -284,7 +286,7 @@ episode 生命周期：
 B 开始录制
 R 结束并标记 failure
 N 结束并标记 success
-Ctrl+C 安全关闭；活动 episode 标记 interrupted/failure
+Ctrl+C 安全关闭；废弃未用 R/N 结束的当前 episode
 ```
 
 转换规则：
@@ -315,6 +317,7 @@ scripts/replay_hdf5.py
 - 读取 episode 的 `initial_state`，用 `env.reset_to(initial_state, None, is_relative=True)` 恢复录制初始状态。
 - 按 `timestamp` 间隔逐帧执行 `env.step(action)`。
 - 可选验证运行时关节、方块位置和相机非空白。
+- GUI 默认三画面布局：上排 front+wrist，占约 40%；下排显示 Isaac viewer 主视角。
 
 正式启动：
 
@@ -335,15 +338,17 @@ Q / Esc 退出
 
 同一个 HDF5 文件内的 episode 可在同一次 IsaacSim 启动中切换；更换 HDF5 文件仍需重新启动入口。
 
-## SO101 Leader 标定
+## SO101 标定
 
-标定检查/导入/重标定入口：
+通用标定检查/导入/重标定入口：
 
 ```text
-scripts/calibrate_so101_leader.py
+scripts/calibrate_so101.py
 ```
 
-当前项目默认标定文件：
+旧 leader 入口 `scripts/calibrate_so101_leader.py` 保留为兼容 wrapper。
+
+当前项目默认 leader 标定文件：
 
 ```text
 configs/so101_leader_calibration.json
@@ -355,7 +360,7 @@ configs/so101_leader_calibration.json
 /home/a/.local/share/ov/pkg/leisaac/source/leisaac/leisaac/devices/lerobot/.cache/so101_leader.json
 ```
 
-运行时解析顺序：
+leader 运行时解析顺序：
 
 ```text
 1. --leader_calibration
@@ -365,6 +370,15 @@ configs/so101_leader_calibration.json
 5. LeRobot cache: teleoperators/so101_leader/{leader_id}.json
 6. LeIsaac cache: .../.cache/so101_leader.json
 ```
+
+follower 标定默认输出：
+
+```text
+configs/so101_follower_calibration.json
+```
+
+follower 标定只在用户明确运行 `scripts/calibrate_so101.py --arm follower --calibrate`
+时连接真实 follower；仿真、遥操作和回放入口不会控制真实 follower。
 
 当前 LeRobot cache 下也存在：
 
