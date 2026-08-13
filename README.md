@@ -1,6 +1,7 @@
-# LWH Robot Learning
+# HZ Robot Learning
+## 1.这里的轨迹回放，我希望是同时显示双相机+主视角，相当于三个相机窗口，希望是将画面分成两排，第一排占百分号之40的画幅，再分两列显示双相机，第二排显示主视角。      2.然后标定工具应该是两个手臂都有的，其实就是把lerobot的标定程序超一下。同时这个标定程序应该是从stage_1就要有的能力，你要补充到对应每个分支里面去
 
-当前分支是 `stage_4`：在 Stage 3 录制和转换基础上，新增 HDF5 轨迹回放和 SO101 Leader 标定检查/导入/重标定入口。
+## 当前分支是 `stage_4`：双相机 + 键盘/leader控制 + HDF5录制/lerobot转换 +HDF5 轨迹回放/SO101 Leader 标定检查/导入/重标定。
 
 项目只运行 IsaacLab 仿真，不控制真实 follower，不启动 ROS。`--teleop_device so101leader` 只读取真实 SO101 Leader 作为仿真输入。
 
