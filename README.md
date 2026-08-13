@@ -1,5 +1,5 @@
 # HZ Robot Learning
-# 能不能做成--record来使用录制？    同时ctrl+c中断的数据废弃掉？
+
 ## 当前分支是 `stage_3`：双相机 + 键盘/leader控制 + HDF5录制 + LeRobotDataset v3 的转换脚本。
 
 
@@ -15,10 +15,9 @@ git checkout stage_3
 常用采集流程：
 
 ```bash
-python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
 conda activate lerobot05
-python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
 ```
 
 按键：
@@ -41,7 +40,7 @@ Ctrl+C 或关闭窗口退出
 B 开始当前 episode 的操作和录制
 R 结束当前 episode，标记 failure，然后 reset
 N 结束当前 episode，标记 success，然后 reset
-Ctrl+C 安全关闭文件；未完成 episode 会标记 interrupted/failure
+Ctrl+C 安全关闭文件；未用 R/N 结束的当前 episode 会被废弃
 ```
 
 ## 遥操作参数
@@ -63,6 +62,7 @@ Ctrl+C 安全关闭文件；未完成 episode 会标记 interrupted/failure
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
+| `--record` | `False` | 加在 `scripts/teleop.py` 上后进入 HDF5 录制流程。 |
 | `--output` | 必填/默认脚本值 | HDF5 输出路径。 |
 | `--overwrite` | `False` | 输出文件已存在时先删除。 |
 | `--append` | `False` | 向已有 HDF5 追加 episode。 |

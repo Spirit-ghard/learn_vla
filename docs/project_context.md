@@ -233,8 +233,10 @@ gripper
 Isaac 端录制入口：
 
 ```text
-scripts/record_hdf5.py
+scripts/teleop.py --record
 ```
+
+底层 HDF5 写入逻辑仍在 `scripts/record_hdf5.py`，正式使用优先走 `teleop.py --record`。
 
 LeRobot 转换入口：
 
@@ -281,7 +283,7 @@ episode 生命周期：
 B 开始录制
 R 结束并标记 failure
 N 结束并标记 success
-Ctrl+C 安全关闭；活动 episode 标记 interrupted/failure
+Ctrl+C 安全关闭；废弃未用 R/N 结束的当前 episode
 ```
 
 转换规则：

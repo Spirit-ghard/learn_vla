@@ -75,19 +75,19 @@ python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device
 键盘录制 HDF5：
 
 ```bash
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device keyboard --output datasets/hdf5/lwh_so101_table.hdf5
 ```
 
 双相机录制 HDF5：
 
 ```bash
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
 ```
 
 真实 SO101 Leader 输入录制 HDF5：
 
 ```bash
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
 ```
 
 转换 LeRobotDataset v3：
@@ -147,4 +147,5 @@ Stage 4 最小目标：
 - 每次实现一个阶段，完成验证后再进入下一阶段。
 - 内部验证产物不要保留在仓库里。
 - Stage 3 HDF5 使用 `/data/demo_N` 和 `/episodes/000000` 两套入口；`/episodes` 是硬链接。
+- Stage 3 正式录制入口为 `scripts/teleop.py --record`；Ctrl+C 会废弃未用 R/N 结束的当前 episode。
 - 转换脚本默认只转换成功 episode、跳过前 5 帧、输出 LeRobot image 格式。

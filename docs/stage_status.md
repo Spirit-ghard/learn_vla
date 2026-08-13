@@ -212,7 +212,8 @@ stage_3
 
 目标：
 
-- 新增独立录制入口 `scripts/record_hdf5.py`。
+- 新增正式录制入口 `scripts/teleop.py --record`。
+- 底层 HDF5 写入逻辑保留在 `scripts/record_hdf5.py`，由正式入口复用。
 - 不把录制逻辑写入任务配置文件。
 - 初期优先写 HDF5，降低 IsaacLab 运行环境中的 LeRobot 依赖耦合。
 - 参考 LeIsaac 的 HDF5 recorder/teleop 流程，但不直接 import LeIsaac。
@@ -222,6 +223,7 @@ stage_3
 关键文件：
 
 ```text
+scripts/teleop.py
 scripts/record_hdf5.py
 scripts/convert_hdf5_to_lerobot.py
 scripts/validate_record_hdf5.py
@@ -230,10 +232,11 @@ scripts/validate_record_hdf5.py
 正式录制：
 
 ```bash
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --output datasets/hdf5/lwh_so101_table.hdf5
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_dual.hdf5
-python3 scripts/record_hdf5.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
 ```
+
+常用可调项：`--teleop_device keyboard|so101leader` 选择输入设备，`--camera_mode front|dual`
+选择单/双相机，`--append` 追加到已有 HDF5，`--overwrite` 覆盖已有 HDF5。
 
 正式转换：
 
@@ -268,7 +271,7 @@ episode 生命周期：
 B: 开始操作和录制 episode
 R: 结束当前 episode，标记失败，reset 进入下一 episode
 N: 结束当前 episode，标记成功，reset 进入下一 episode
-Ctrl+C: 安全关闭文件
+Ctrl+C: 安全关闭文件，并废弃未用 R/N 结束的当前 episode
 ```
 
 转换规则：

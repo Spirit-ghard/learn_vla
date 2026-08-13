@@ -448,6 +448,30 @@ class HDF5TeleopRecorder:
         self._file.flush()
         return summary
 
+    def discard_episode(self, *, reason: str) -> dict[str, Any] | None:
+        """废弃未用 R/N 正式结束的 episode，避免 Ctrl+C 留下脏数据。"""
+        if self._episode_group is None or self._episode_index is None:
+            return None
+
+        episode_index = self._episode_index
+        frame_count = self._episode_frames
+        demo_name = f"demo_{episode_index}"
+        link_name = f"{episode_index:06d}"
+        self._episode_group = None
+        self._episode_index = None
+        self._episode_frames = 0
+
+        if link_name in self._episodes_group:
+            del self._episodes_group[link_name]
+        if demo_name in self._data_group:
+            del self._data_group[demo_name]
+        self._file.flush()
+        return {
+            "episode_index": episode_index,
+            "num_samples": frame_count,
+            "reason": reason,
+        }
+
     def close(self) -> None:
         self._file.flush()
         self._file.close()
@@ -823,13 +847,13 @@ def main() -> None:
                 break
 
         if recorder.is_recording:
-            summary = recorder.finish_episode(success=False, outcome="interrupted")
-            finished_episodes.append(summary)
-            print(
-                f"LWH_RECORD_EPISODE_FINISHED index={summary['episode_index']} "
-                f"success=False frames={summary['num_samples']} valid={summary['valid']} outcome=interrupted",
-                flush=True,
-            )
+            discarded = recorder.discard_episode(reason="interrupted")
+            if discarded is not None:
+                print(
+                    f"LWH_RECORD_EPISODE_DISCARDED index={discarded['episode_index']} "
+                    f"frames={discarded['num_samples']} reason={discarded['reason']}",
+                    flush=True,
+                )
 
         loop_elapsed_s = time.perf_counter() - loop_started_at
         if VALIDATION_MODE:
@@ -862,6 +886,14 @@ def main() -> None:
         if teleop is not None and hasattr(teleop, "disconnect"):
             teleop.disconnect()
         if recorder is not None:
+            if recorder.is_recording:
+                discarded = recorder.discard_episode(reason="aborted")
+                if discarded is not None:
+                    print(
+                        f"LWH_RECORD_EPISODE_DISCARDED index={discarded['episode_index']} "
+                        f"frames={discarded['num_samples']} reason={discarded['reason']}",
+                        flush=True,
+                    )
             recorder.close()
         env.close()
 

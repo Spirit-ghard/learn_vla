@@ -220,7 +220,8 @@
 
 决策：
 
-- Stage 3 使用独立 Isaac 入口 `scripts/record_hdf5.py` 录制 HDF5。
+- Stage 3 使用 `scripts/teleop.py --record` 作为正式 Isaac 录制入口。
+- HDF5 写入逻辑仍保留在 `scripts/record_hdf5.py`，由正式入口复用。
 - Stage 3 使用独立 LeRobot 入口 `scripts/convert_hdf5_to_lerobot.py` 转换 LeRobotDataset v3。
 - 暂不在 IsaacLab 仿真环境内直接依赖 LeRobot。
 
@@ -237,6 +238,7 @@
 - HDF5 主结构采用 `/data/demo_N`，同时提供 `/episodes/000000` 硬链接。
 - 每帧写入 `observation/state`、`observation/images/*`、`action`、`timestamp`、`episode_index`、`frame_index`、`task`。
 - episode 按 `B` 开始录制，`R` 标记失败结束，`N` 标记成功结束。
+- Ctrl+C 或窗口关闭会废弃未用 R/N 正式结束的当前 episode，避免 interrupted/failure 脏数据进入数据集。
 - LeRobot 转换默认只转换成功 episode，并跳过前 5 帧。
 
 ## 2026-08-11：LeRobot 转换默认使用 image 格式
