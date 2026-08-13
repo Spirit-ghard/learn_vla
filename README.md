@@ -1,6 +1,6 @@
-# LWH Robot Learning
+# HZ Robot Learning
 
-当前分支是 `stage_2_2`：在第二阶段键盘遥操作基础上，提供单相机默认遥操作和双相机可选运行。
+## 当前分支是 `stage_2_2`：键盘控制+单/双相机
 
 项目只运行 IsaacLab 仿真，不控制真实 follower，不启动 ROS。本分支不访问串口。
 
