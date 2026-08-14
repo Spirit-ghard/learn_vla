@@ -1,5 +1,36 @@
 # HZ Robot Learning
+```bash
+  目标：
+  现有 HDF5 只有 front / wrist 两路视角，网页回放工具需要三窗口布局：
+  第一排 40% 高度，左右分别显示 front 和 wrist；
+  第二排 60% 高度，显示全场景主视角 overview。
+  由于网页回放不启动 IsaacSim，只能播放 HDF5 中已经录制的图像，因此 overview 必须在采集阶段写入 HDF5。
 
+  实现要求：
+  1. 在 SO101 table 任务 scene 中新增一个 overview / third-person TiledCamera。
+  2. overview 需要能看到完整桌面、机器人、红色方块和夹爪运动区域。
+  3. 分辨率建议保持 640x480 RGB，更新频率 30 FPS，和 front/wrist 对齐。
+  4. HDF5 schema 中新增：
+     /data/demo_N/observation/images/overview
+  5. metadata 的 camera_keys 需要包含 overview。
+  6. 新增或扩展 camera_mode：
+     - front：只录 front
+     - dual：录 front + wrist
+     - triple：录 front + wrist + overview
+  7. 网页 viewer 默认三窗口映射：
+     - top-left: front
+     - top-right: wrist
+     - bottom: overview
+  8. 如果旧数据没有 overview，viewer 需要显示“overview 未录制”，不能启动 IsaacSim 生成画面。
+
+  验收标准：
+  1. 使用 --camera_mode triple 录制 HDF5 后，h5py 能看到 observation/images/front、wrist、overview 三路图像。
+  2. 三路图像 shape 都是 frames x 480 x 640 x 3。
+  3. metadata/camera_keys 包含 ["front", "wrist", "overview"]。
+  4. overview 画面能稳定看到完整桌面、机器人、方块和主要操作区域。
+  5. timestamp/action/state 与三路图像帧数一致。
+  6. 单相机和双相机旧模式不被破坏。
+```
 当前分支是 `stage_4`：HDF5 轨迹回放、三画面回放视图、SO101 leader/follower 标定工具。
 
 项目只运行 IsaacLab 仿真，不控制真实 follower。`--teleop_device so101leader` 只读取真实 SO101 Leader 作为仿真输入。
