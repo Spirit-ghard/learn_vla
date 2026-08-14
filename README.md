@@ -1,5 +1,6 @@
 # HZ Robot Learning
 ## Phase 1 ：基于 IsaacLab 的 SO101 桌面仿真场景。
+## 替换成香蕉或是其他易于抓取的物体，同时加入一小点域随机化
 场景内容：
 
 - SO101 Follower
