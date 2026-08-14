@@ -7,13 +7,14 @@
 - 支持 file/episode 下拉、三窗口同步图像回放、播放/暂停/逐帧/timeline/速度控制。
 - 页面布局固定为上 40% front+wrist，下 60% overview；旧数据缺 wrist/overview 时显示“未录制”。
 - 读取并显示当前帧 timestamp、episode outcome、action/state 前 16 个值。
+- action/state 时间曲线（分桶降采样、逐维自动缩放、随帧游标）。
+- 数据质量检查：timestamp 间隔/单调性、相机空白帧、缺失相机，异常 episode 标记。
+- 质量报告 JSON 下载，用于快速筛查采集数据问题。
+- 服务端 LRU 帧缓存，降低拖动 timeline 时的重复编码开销。
 - 固定使用 --port 指定端口；端口被占用时会先清理旧进程，再绑定同一个端口。
 
-后续要做：
-- 录制端补齐 overview 第三路相机后，viewer 可直接显示，不需要改数据读取路径。
-- 增加 action/state 曲线、timestamp 间隔检查、空白图像检查和异常 episode 标记。
-- 增加导出质量报告 JSON，用于快速筛查采集数据问题。
-- 如果 HDF5 文件很大，再改为帧缓存或 JPEG/PNG 编码缓存，降低逐帧读取开销。
+录制端支持 --camera_mode triple，overview 第三视角会写入原始 HDF5；LeRobot 转换默认只读取
+training_camera_keys，也就是 front/wrist，不会把 overview 混入训练输入。
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import struct
 import sys
 import tempfile
 import time
+from collections import OrderedDict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -175,6 +177,19 @@ def list_camera_keys(h5_file: h5py.File, episode: h5py.Group | None) -> list[str
     return []
 
 
+def list_metadata_string_values(h5_file: h5py.File, key: str) -> list[str]:
+    metadata = h5_file.get("metadata")
+    if metadata is None:
+        return []
+    values = read_string_dataset(metadata, key)
+    if values:
+        return values
+    values = read_json_attr(metadata.attrs, key, None)
+    if values:
+        return [str(value) for value in values]
+    return []
+
+
 def list_joint_names(h5_file: h5py.File) -> list[str]:
     metadata = h5_file.get("metadata")
     if metadata is None:
@@ -234,6 +249,8 @@ def file_summary(path: Path) -> dict[str, Any]:
             "teleop_device": str(metadata_attrs.get("teleop_device", "")),
             "action_dim": int(metadata_attrs.get("action_dim", 0)),
             "camera_keys": list_camera_keys(h5_file, first_episode),
+            "training_camera_keys": list_metadata_string_values(h5_file, "training_camera_keys"),
+            "visualization_camera_keys": list_metadata_string_values(h5_file, "visualization_camera_keys"),
             "joint_names": list_joint_names(h5_file),
             "episodes": episodes,
         }
@@ -316,8 +333,198 @@ def encode_frame(path: Path, episode_id: str, camera_key: str, frame_index: int)
         return encode_bmp(np.ascontiguousarray(rgb))
 
 
+class FrameCache:
+    """LRU 缓存编码后的 BMP 帧，拖动 timeline 时避免重复读盘和编码。"""
+
+    def __init__(self, max_entries: int = 512) -> None:
+        self._max_entries = max_entries
+        self._store: "OrderedDict[tuple[str, str, str, int], bytes]" = OrderedDict()
+
+    def get(self, path: Path, episode_id: str, camera_key: str, frame_index: int) -> bytes | None:
+        key = (str(path), episode_id, camera_key, frame_index)
+        value = self._store.get(key)
+        if value is not None:
+            self._store.move_to_end(key)
+        return value
+
+    def put(self, path: Path, episode_id: str, camera_key: str, frame_index: int, payload: bytes) -> None:
+        key = (str(path), episode_id, camera_key, frame_index)
+        self._store[key] = payload
+        self._store.move_to_end(key)
+        while len(self._store) > self._max_entries:
+            self._store.popitem(last=False)
+
+
+FRAME_CACHE = FrameCache()
+
+
+def cached_encode_frame(path: Path, episode_id: str, camera_key: str, frame_index: int) -> bytes:
+    """带 LRU 缓存的帧编码入口。"""
+    cached = FRAME_CACHE.get(path, episode_id, camera_key, frame_index)
+    if cached is not None:
+        return cached
+    payload = encode_frame(path, episode_id, camera_key, frame_index)
+    FRAME_CACHE.put(path, episode_id, camera_key, frame_index, payload)
+    return payload
+
+
+def series_frame(path: Path, episode_id: str, max_points: int = 400) -> dict[str, Any]:
+    """把 action/state 数值序列分桶降采样成 min/max 曲线数据。
+
+    只读 action/state 这类小数值数组，不读图像，适合网页画时间曲线。
+    """
+    with h5py.File(path, "r") as h5_file:
+        group = episode_root(h5_file)[episode_id]
+        num_samples = int(group.attrs.get("num_samples", group["action"].shape[0] if "action" in group else 0))
+        if num_samples < 1:
+            raise ValueError("Episode has no frames.")
+
+        def bucketize(array: np.ndarray) -> dict[str, Any]:
+            total, dims = array.shape
+            if total <= max_points:
+                indices = list(range(total))
+                values = [[float(array[t, d]) for t in range(total)] for d in range(dims)]
+                return {"indices": indices, "mins": values, "maxs": values}
+
+            bucket_size = (total + max_points - 1) // max_points
+            indices: list[int] = []
+            mins: list[list[float]] = [[] for _ in range(dims)]
+            maxs: list[list[float]] = [[] for _ in range(dims)]
+            for start in range(0, total, bucket_size):
+                chunk = array[start : start + bucket_size]
+                indices.append(start + chunk.shape[0] // 2)
+                for dim in range(dims):
+                    mins[dim].append(float(chunk[:, dim].min()))
+                    maxs[dim].append(float(chunk[:, dim].max()))
+            return {"indices": indices, "mins": mins, "maxs": maxs}
+
+        def read_series(dataset_path: str) -> dict[str, Any] | None:
+            if dataset_path not in group:
+                return None
+            array = np.asarray(group[dataset_path], dtype=np.float32)
+            if array.ndim != 2:
+                return None
+            return bucketize(array)
+
+        return {
+            "num_samples": num_samples,
+            "action": read_series("action"),
+            "state": read_series("observation/state"),
+        }
+
+
+# 空白帧判据与录制端 validate 保持一致：采样帧 RGB 标准差小于 1 视为空白。
+BLANK_STD_THRESHOLD = 1.0
+QUALITY_SAMPLE_FRAMES = 8
+
+
+def file_quality(path: Path) -> dict[str, Any]:
+    """检查文件内所有 episode 的 timestamp 间隔/单调性和相机空白帧。
+
+    图像只采样每个 camera 最多 8 帧，避免大文件全量扫描过慢。
+    """
+    with h5py.File(path, "r") as h5_file:
+        root = episode_root(h5_file)
+        names = sorted(root.keys(), key=episode_sort_key)
+        metadata = h5_file.get("metadata")
+        metadata_attrs = metadata.attrs if metadata is not None else {}
+        file_camera_keys = list_camera_keys(h5_file, root[names[0]] if names else None)
+        episodes: list[dict[str, Any]] = []
+        for name in names:
+            group = root[name]
+            num_samples = int(group.attrs.get("num_samples", group["action"].shape[0] if "action" in group else 0))
+            timestamps = np.asarray(group["timestamp"][:], dtype=np.float64) if "timestamp" in group else np.array([])
+            if timestamps.shape[0] == num_samples and num_samples > 1:
+                diffs = np.diff(timestamps)
+                non_monotonic = int(np.count_nonzero(diffs < -1.0e-6))
+                max_gap_s = float(diffs.max())
+                median_interval_s = float(np.median(diffs))
+                actual_fps = float(1.0 / median_interval_s) if median_interval_s > 1.0e-6 else None
+            else:
+                non_monotonic = 0
+                max_gap_s = 0.0
+                median_interval_s = 0.0
+                actual_fps = None
+
+            episode_cameras = sorted(group["observation/images"].keys()) if "observation/images" in group else []
+            blank_cameras: list[str] = []
+            for camera_key in episode_cameras:
+                dataset = group[f"observation/images/{camera_key}"]
+                sample_indices = np.unique(
+                    np.linspace(0, dataset.shape[0] - 1, QUALITY_SAMPLE_FRAMES, dtype=np.int64)
+                )
+                stds = [float(np.asarray(dataset[int(i)])[..., :3].std()) for i in sample_indices]
+                if min(stds) < BLANK_STD_THRESHOLD:
+                    blank_cameras.append(camera_key)
+
+            missing_cameras = [key for key in file_camera_keys if key not in episode_cameras]
+            anomalies: list[str] = []
+            if num_samples < 1:
+                anomalies.append("no frames")
+            if non_monotonic > 0:
+                anomalies.append(f"{non_monotonic} timestamp backward jumps")
+            if actual_fps is not None and actual_fps < 15.0:
+                anomalies.append(f"low fps {actual_fps:.1f}")
+            for camera_key in blank_cameras:
+                anomalies.append(f"{camera_key} blank")
+            for camera_key in missing_cameras:
+                anomalies.append(f"{camera_key} 未录制")
+
+            episodes.append(
+                {
+                    "id": name,
+                    "episode_index": int(group.attrs.get("episode_index", episode_sort_key(name))),
+                    "success": bool(group.attrs.get("success", False)),
+                    "valid": bool(group.attrs.get("valid", True)),
+                    "outcome": str(group.attrs.get("outcome", "")),
+                    "num_samples": num_samples,
+                    "duration_s": float(timestamps[-1] - timestamps[0]) if timestamps.shape[0] > 1 else 0.0,
+                    "median_frame_interval_s": median_interval_s,
+                    "actual_fps": actual_fps,
+                    "max_frame_gap_s": max_gap_s,
+                    "non_monotonic_count": non_monotonic,
+                    "camera_keys": episode_cameras,
+                    "blank_cameras": blank_cameras,
+                    "missing_cameras": missing_cameras,
+                    "anomalies": anomalies,
+                }
+            )
+
+        return {
+            "path": str(path),
+            "name": path.name,
+            "task": str(metadata_attrs.get("task", "")),
+            "fps": int(metadata_attrs.get("fps", 30)),
+            "teleop_device": str(metadata_attrs.get("teleop_device", "")),
+            "camera_keys": file_camera_keys,
+            "training_camera_keys": list_metadata_string_values(h5_file, "training_camera_keys"),
+            "visualization_camera_keys": list_metadata_string_values(h5_file, "visualization_camera_keys"),
+            "overview_recorded": "overview" in file_camera_keys,
+            "episodes": episodes,
+        }
+
+
 def json_bytes(payload: Any) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+# 质量报告按 (path, mtime) 缓存，避免每次点击都重扫 HDF5。
+QUALITY_CACHE: "OrderedDict[tuple[str, int], dict[str, Any]]" = OrderedDict()
+QUALITY_CACHE_MAX = 8
+
+
+def cached_file_quality(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    key = (str(path), int(stat.st_mtime), int(stat.st_size))
+    if key in QUALITY_CACHE:
+        QUALITY_CACHE.move_to_end(key)
+        return QUALITY_CACHE[key]
+    report = file_quality(path)
+    QUALITY_CACHE[key] = report
+    QUALITY_CACHE.move_to_end(key)
+    while len(QUALITY_CACHE) > QUALITY_CACHE_MAX:
+        QUALITY_CACHE.popitem(last=False)
+    return report
 
 
 def html_page() -> bytes:
@@ -426,6 +633,23 @@ class ViewerHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/files/") and path.endswith("/summary"):
                 file_id = path.split("/")[3]
                 self.send_json(file_summary(self.catalog.resolve(file_id)))
+            elif path.startswith("/api/files/") and path.endswith("/quality"):
+                file_id = path.split("/")[3]
+                report = cached_file_quality(self.catalog.resolve(file_id))
+                if query.get("download", ["0"])[0] == "1":
+                    filename = f"quality_report_{Path(report['name']).stem}.json"
+                    self.send_blob(
+                        json_bytes(report),
+                        "application/json; charset=utf-8",
+                        extra_headers=[("Content-Disposition", f'attachment; filename="{filename}"')],
+                    )
+                else:
+                    self.send_json(report)
+            elif path.startswith("/api/files/") and "/series" in path:
+                parts = path.strip("/").split("/")
+                file_id = parts[2]
+                episode_id = parts[4]
+                self.send_json(series_frame(self.catalog.resolve(file_id), episode_id))
             elif path.startswith("/api/files/") and "/sample" in path:
                 parts = path.strip("/").split("/")
                 file_id = parts[2]
@@ -438,7 +662,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 episode_id = parts[4]
                 camera = query.get("camera", ["front"])[0]
                 frame = int(query.get("frame", ["0"])[0])
-                image = encode_frame(self.catalog.resolve(file_id), episode_id, camera, frame)
+                image = cached_encode_frame(self.catalog.resolve(file_id), episode_id, camera, frame)
                 self.send_blob(image, "image/bmp", cache_control="no-store")
             elif path == "/favicon.ico":
                 self.send_response(HTTPStatus.NO_CONTENT)
@@ -490,11 +714,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
         *,
         status: HTTPStatus = HTTPStatus.OK,
         cache_control: str = "no-store",
+        extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", cache_control)
+        for header_name, header_value in extra_headers or []:
+            self.send_header(header_name, header_value)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -705,10 +932,76 @@ INDEX_HTML = r"""<!doctype html>
       border-left: 1px solid var(--line);
       padding: 18px;
       display: grid;
-      grid-template-rows: auto auto 1fr;
+      grid-template-rows: auto auto auto auto 1fr;
       gap: 18px;
       min-height: 0;
       background: rgba(255, 255, 255, 0.34);
+    }
+
+    .charts {
+      display: grid;
+      gap: 12px;
+    }
+
+    .chart-block {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+
+    .chart-block h2 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 540;
+    }
+
+    .chart-block canvas {
+      width: 100%;
+      height: 110px;
+      display: block;
+      background: #fbfbf9;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .quality {
+      display: grid;
+      gap: 8px;
+    }
+
+    .quality-list {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .quality-item {
+      border-top: 1px solid var(--line);
+      padding-top: 6px;
+      display: grid;
+      gap: 2px;
+    }
+
+    .quality-item .head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .quality-item .meta {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .quality-item .anomalies {
+      color: var(--bad);
+    }
+
+    .quality-item .clean {
+      color: var(--ok);
     }
 
     .controls {
@@ -937,6 +1230,25 @@ INDEX_HTML = r"""<!doctype html>
           <div class="metric"><div class="label">Outcome</div><div class="value" id="outcomeValue">-</div></div>
         </section>
 
+        <section class="charts">
+          <div class="chart-block">
+            <h2>Action curves</h2>
+            <canvas id="actionChart"></canvas>
+          </div>
+          <div class="chart-block">
+            <h2>State curves</h2>
+            <canvas id="stateChart"></canvas>
+          </div>
+        </section>
+
+        <section class="quality">
+          <div class="button-row">
+            <button id="qualityButton" type="button">Quality Report</button>
+            <button id="qualityDownload" type="button" disabled>Download JSON</button>
+          </div>
+          <div class="quality-list" id="qualityList"></div>
+        </section>
+
         <section class="vectors">
           <div class="vector-block">
             <h2>Action</h2>
@@ -966,6 +1278,8 @@ INDEX_HTML = r"""<!doctype html>
       timer: null,
       fps: 30,
       cameras: [],
+      series: null,
+      quality: null,
     };
 
     const els = {
@@ -996,7 +1310,14 @@ INDEX_HTML = r"""<!doctype html>
       emptyFront: document.getElementById("emptyFront"),
       emptyWrist: document.getElementById("emptyWrist"),
       emptyOverview: document.getElementById("emptyOverview"),
+      actionChart: document.getElementById("actionChart"),
+      stateChart: document.getElementById("stateChart"),
+      qualityButton: document.getElementById("qualityButton"),
+      qualityDownload: document.getElementById("qualityDownload"),
+      qualityList: document.getElementById("qualityList"),
     };
+
+    const CHART_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#00a2a2", "#b2793d"];
 
     function setStatus(text, kind = "") {
       els.statusText.textContent = text;
@@ -1081,6 +1402,86 @@ INDEX_HTML = r"""<!doctype html>
       img.src = imageUrl(camera);
     }
 
+    function drawSeriesChart(canvas, series, labels, cursorIndex) {
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = canvas.clientWidth || 280;
+      const cssH = canvas.clientHeight || 110;
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      if (!series) {
+        ctx.fillStyle = "#999";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("missing", 8, 20);
+        return;
+      }
+      const count = series.indices.length;
+      if (count < 1) return;
+      const tMin = series.indices[0];
+      const tMax = series.indices[count - 1] || 1;
+      const padL = 8, padR = 8, padT = 6, padB = 18;
+      const plotW = cssW - padL - padR;
+      const plotH = cssH - padT - padB;
+      const xOf = (t) => padL + ((t - tMin) / Math.max(tMax - tMin, 1)) * plotW;
+      ctx.font = "9px sans-serif";
+      series.mins.forEach((mins, dim) => {
+        const all = mins.concat(series.maxs[dim]);
+        let vMin = Math.min(...all);
+        let vMax = Math.max(...all);
+        if (vMax - vMin < 1e-9) { vMax += 1; vMin -= 1; }
+        const yOf = (v) => padT + (1 - (v - vMin) / (vMax - vMin)) * plotH;
+        const color = CHART_COLORS[dim % CHART_COLORS.length];
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.14;
+        ctx.beginPath();
+        for (let i = 0; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf(mins[i]));
+        for (let i = count - 1; i >= 0; i--) ctx.lineTo(xOf(series.indices[i]), yOf(series.maxs[dim][i]));
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        for (let i = 0; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf((mins[i] + series.maxs[dim][i]) / 2));
+        ctx.stroke();
+        const label = labels && labels[dim] !== undefined ? labels[dim] : `d${dim}`;
+        ctx.fillStyle = color;
+        ctx.fillText(String(label), padL + dim * 42, cssH - 4);
+      });
+      if (cursorIndex !== null && cursorIndex !== undefined && tMax >= tMin) {
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.beginPath();
+        ctx.moveTo(xOf(cursorIndex), padT);
+        ctx.lineTo(xOf(cursorIndex), padT + plotH);
+        ctx.stroke();
+      }
+    }
+
+    function chartLabels(series, names, prefix) {
+      if (!series) return [];
+      return series.mins.map((_, dim) => names && names[dim] ? names[dim].replace(/\.pos$/, "") : `${prefix}${dim}`);
+    }
+
+    function drawCharts() {
+      const series = state.series;
+      const stateNames = state.summary && state.summary.joint_names ? state.summary.joint_names : [];
+      drawSeriesChart(els.actionChart, series ? series.action : null, chartLabels(series ? series.action : null, [], "a"), state.frame);
+      drawSeriesChart(els.stateChart, series ? series.state : null, chartLabels(series ? series.state : null, stateNames, "s"), state.frame);
+    }
+
+    async function loadSeries() {
+      if (!state.fileId || !state.episodeId) return;
+      try {
+        state.series = await api(`/api/files/${state.fileId}/episodes/${state.episodeId}/series`);
+        drawCharts();
+      } catch (error) {
+        state.series = null;
+        drawCharts();
+        setStatus(error.message, "bad");
+      }
+    }
+
     async function renderFrame() {
       const episode = currentEpisode();
       if (!episode) return;
@@ -1092,6 +1493,7 @@ INDEX_HTML = r"""<!doctype html>
       updateImage(els.imgFront, els.emptyFront, els.slotFront.value);
       updateImage(els.imgWrist, els.emptyWrist, els.slotWrist.value);
       updateImage(els.imgOverview, els.emptyOverview, els.slotOverview.value);
+      drawCharts();
 
       try {
         const sample = await api(`/api/files/${state.fileId}/episodes/${state.episodeId}/sample?frame=${state.frame}`);
@@ -1146,17 +1548,21 @@ INDEX_HTML = r"""<!doctype html>
       state.fileId = fileId;
       state.summary = await api(`/api/files/${fileId}/summary`);
       state.fps = state.summary.fps || 30;
+      state.quality = null;
+      state.series = null;
+      els.qualityList.innerHTML = "";
+      els.qualityDownload.disabled = true;
       const episodes = state.summary.episodes || [];
       state.cameras = episodes[0]?.camera_keys || state.summary.camera_keys || [];
+      state.episodeId = episodes[0]?.id || null;
       fillSelect(
         els.episodeSelect,
         episodes.map((episode) => ({
           value: episode.id,
           label: `${episode.label} · ${episode.success ? "success" : "failure"} · ${episode.num_samples} frames`,
         })),
-        episodes[0]?.id || "",
+        state.episodeId || "",
       );
-      state.episodeId = episodes[0]?.id || null;
       configureCameraSlots();
       state.frame = 0;
       els.fpsValue.textContent = String(state.fps);
@@ -1165,10 +1571,13 @@ INDEX_HTML = r"""<!doctype html>
         task: state.summary.task,
         teleop_device: state.summary.teleop_device,
         cameras: state.cameras,
+        training_cameras: state.summary.training_camera_keys || [],
+        visualization_cameras: state.summary.visualization_camera_keys || [],
         joint_names: state.summary.joint_names,
       }, null, 2);
       updateEpisodeReadout();
       setStatus("Ready", "ok");
+      await loadSeries();
       await renderFrame();
     }
 
@@ -1181,6 +1590,97 @@ INDEX_HTML = r"""<!doctype html>
       els.outcomeValue.textContent = episode.success ? "success" : "failure";
     }
 
+    function episodeAnomalies(episodeId) {
+      if (!state.quality) return null;
+      const report = state.quality.episodes.find((item) => item.id === episodeId);
+      return report ? report.anomalies : null;
+    }
+
+    function refreshEpisodeOptions() {
+      const episodes = state.summary ? state.summary.episodes || [] : [];
+      fillSelect(
+        els.episodeSelect,
+        episodes.map((episode) => {
+          const anomalies = episodeAnomalies(episode.id);
+          const warning = anomalies && anomalies.length > 0 ? "⚠ " : "";
+          return {
+            value: episode.id,
+            label: `${warning}${episode.label} · ${episode.success ? "success" : "failure"} · ${episode.num_samples} frames`,
+          };
+        }),
+        state.episodeId || "",
+      );
+    }
+
+    function renderQuality() {
+      const report = state.quality;
+      if (!report) return;
+      els.qualityList.innerHTML = "";
+      if (!report.overview_recorded) {
+        const note = document.createElement("div");
+        note.className = "quality-item";
+        note.innerHTML = "<span>该文件录制时没有 overview 第三视角（旧数据）；bottom 窗口显示 \"overview 未录制\"。</span>";
+        els.qualityList.appendChild(note);
+      }
+      for (const episode of report.episodes) {
+        const item = document.createElement("div");
+        item.className = "quality-item";
+        const head = document.createElement("div");
+        head.className = "head";
+        const name = document.createElement("span");
+        name.textContent = episode.anomalies.length > 0 ? `⚠ ${episode.id}` : episode.id;
+        const outcome = document.createElement("span");
+        outcome.textContent = `${episode.success ? "success" : "failure"} · ${episode.outcome || "-"}`;
+        head.appendChild(name);
+        head.appendChild(outcome);
+        item.appendChild(head);
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${episode.num_samples} frames · ${episode.duration_s.toFixed(1)} s · ` +
+          `${episode.actual_fps ? episode.actual_fps.toFixed(1) + " fps" : "no timestamps"}`;
+        item.appendChild(meta);
+        const anomalyLine = document.createElement("div");
+        anomalyLine.className = episode.anomalies.length > 0 ? "anomalies" : "clean";
+        anomalyLine.textContent = episode.anomalies.length > 0
+          ? episode.anomalies.join(" · ")
+          : `cameras: ${episode.camera_keys.join(", ") || "none"}`;
+        item.appendChild(anomalyLine);
+        els.qualityList.appendChild(item);
+      }
+      refreshEpisodeOptions();
+      els.qualityDownload.disabled = false;
+      setStatus(`Quality: ${report.episodes.filter((item) => item.anomalies.length > 0).length}/${report.episodes.length} episodes with warnings`, "ok");
+    }
+
+    async function loadQuality() {
+      if (!state.fileId) return;
+      setStatus("Analyzing quality");
+      try {
+        state.quality = await api(`/api/files/${state.fileId}/quality`);
+        renderQuality();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    }
+
+    async function downloadQuality() {
+      if (!state.fileId) return;
+      try {
+        const response = await fetch(`/api/files/${state.fileId}/quality?download=1`);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "quality_report.json";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    }
+
     els.fileSelect.addEventListener("change", () => loadSummary(els.fileSelect.value).catch((error) => setStatus(error.message, "bad")));
     els.uploadButton.addEventListener("click", () => els.uploadInput.click());
     els.uploadInput.addEventListener("change", () => {
@@ -1189,7 +1689,7 @@ INDEX_HTML = r"""<!doctype html>
       uploadLocalFile(file).catch((error) => setStatus(error.message, "bad"));
       els.uploadInput.value = "";
     });
-    els.episodeSelect.addEventListener("change", () => {
+    els.episodeSelect.addEventListener("change", async () => {
       stopPlayback();
       state.episodeId = els.episodeSelect.value;
       const episode = currentEpisode();
@@ -1197,8 +1697,28 @@ INDEX_HTML = r"""<!doctype html>
       configureCameraSlots();
       state.frame = 0;
       updateEpisodeReadout();
+      await loadSeries();
       renderFrame();
     });
+    els.qualityButton.addEventListener("click", () => loadQuality());
+    els.qualityDownload.addEventListener("click", () => downloadQuality());
+    document.addEventListener("keydown", (event) => {
+      const tag = (document.activeElement && document.activeElement.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "BUTTON") return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        state.playing ? stopPlayback() : startPlayback();
+      } else if (event.key === "ArrowLeft") {
+        stopPlayback();
+        state.frame -= 1;
+        renderFrame();
+      } else if (event.key === "ArrowRight") {
+        stopPlayback();
+        state.frame += 1;
+        renderFrame();
+      }
+    });
+    window.addEventListener("resize", () => drawCharts());
     els.playButton.addEventListener("click", () => state.playing ? stopPlayback() : startPlayback());
     els.prevButton.addEventListener("click", () => {
       stopPlayback();

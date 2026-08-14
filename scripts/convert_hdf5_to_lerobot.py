@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 
 
-DEFAULT_TASK_DESCRIPTION = "Manipulate the red cube on the table."
+DEFAULT_TASK_DESCRIPTION = "Grasp the yellow banana-like capsule on the table."
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,7 +42,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera_keys",
         default=None,
-        help="Comma-separated camera keys to convert. Defaults to HDF5 metadata, for example front,wrist.",
+        help=(
+            "Comma-separated camera keys to convert. Defaults to HDF5 training_camera_keys, "
+            "normally front,wrist. Pass overview explicitly only for debugging."
+        ),
     )
     parser.add_argument(
         "--episodes",
@@ -157,15 +160,26 @@ def read_camera_keys(h5_file: h5py.File, args: argparse.Namespace, first_episode
         return [key.strip() for key in args.camera_keys.split(",") if key.strip()]
     metadata = h5_file.get("metadata")
     if metadata is not None:
+        training_keys = read_string_dataset(metadata, "training_camera_keys")
+        if training_keys:
+            return training_keys
+        training_keys = read_json_attr(metadata.attrs, "training_camera_keys", None)
+        if training_keys:
+            return [str(key) for key in training_keys]
         keys = read_string_dataset(metadata, "camera_keys")
         if keys:
-            return keys
+            policy_keys = [key for key in keys if key in ("front", "wrist")]
+            return policy_keys or keys
         keys = read_json_attr(metadata.attrs, "camera_keys", None)
         if keys:
-            return [str(key) for key in keys]
+            normalized_keys = [str(key) for key in keys]
+            policy_keys = [key for key in normalized_keys if key in ("front", "wrist")]
+            return policy_keys or normalized_keys
     if "observation" not in first_episode or "images" not in first_episode["observation"]:
         return []
-    return sorted(first_episode["observation/images"].keys())
+    keys = sorted(first_episode["observation/images"].keys())
+    policy_keys = [key for key in keys if key in ("front", "wrist")]
+    return policy_keys or keys
 
 
 def read_joint_names(h5_file: h5py.File, state_dim: int) -> list[str]:
@@ -231,6 +245,11 @@ def inspect_hdf5(args: argparse.Namespace) -> dict[str, Any]:
         state_sample = np.asarray(first_episode["observation/state"][sample_index], dtype=np.float32)
         action_sample = np.asarray(action_dataset[sample_index], dtype=np.float32)
         camera_keys = read_camera_keys(h5_file, args, first_episode)
+        missing_camera_keys = [
+            key for key in camera_keys if f"observation/images/{key}" not in first_episode
+        ]
+        if missing_camera_keys:
+            raise KeyError(f"Selected camera stream is missing from HDF5: {missing_camera_keys}")
         camera_samples = {
             key: np.asarray(first_episode[f"observation/images/{key}"][sample_index])
             for key in camera_keys

@@ -48,8 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera_mode",
         default="front",
-        choices=["front", "dual"],
-        help="Camera set to record. front is the default high-frequency baseline; dual records front+wrist.",
+        choices=["front", "dual", "triple"],
+        help=(
+            "Camera set to record. front records front; dual records front+wrist; "
+            "triple also records overview for visual inspection."
+        ),
     )
     parser.add_argument(
         "--ground_mode",
@@ -159,6 +162,21 @@ def delete_attribute(obj, attr_name: str) -> None:
         delattr(obj, attr_name)
 
 
+def configure_camera_mode(env_cfg, camera_mode: str) -> None:
+    """按入口参数裁剪相机；overview 只供 HDF5/Web 可视化，不默认进入训练转换。"""
+    if camera_mode == "front":
+        for attr_name in ("wrist", "overview"):
+            delete_attribute(env_cfg.scene, attr_name)
+            delete_attribute(env_cfg.observations.policy, attr_name)
+    elif camera_mode == "dual":
+        delete_attribute(env_cfg.scene, "overview")
+        delete_attribute(env_cfg.observations.policy, "overview")
+    elif camera_mode == "triple":
+        return
+    else:
+        raise ValueError(f"Unsupported camera mode: {camera_mode}")
+
+
 def write_process_status(status: str) -> None:
     """向 Isaac 运行时监督进程写入最终状态，便于自动验证捕获。"""
     status_path = os.environ.get("LWH_VALIDATION_STATUS_FILE")
@@ -225,6 +243,15 @@ def write_string_dataset(group: h5py.Group, key: str, values: list[str]) -> None
     group.create_dataset(key, data=np.asarray(values, dtype=object), dtype=dtype)
 
 
+def read_string_dataset(group: h5py.Group, key: str) -> list[str] | None:
+    """读取 HDF5 字符串数组；用于验证 metadata 中的相机契约。"""
+    if key not in group:
+        return None
+    dataset = group[key]
+    values = dataset.asstr()[:]
+    return [str(value) for value in values.tolist()]
+
+
 class HDF5TeleopRecorder:
     """LeIsaac/IsaacLab 风格的在线 HDF5 episode 写入器。"""
 
@@ -236,6 +263,8 @@ class HDF5TeleopRecorder:
         fps: int,
         joint_names: list[str],
         camera_keys: list[str],
+        training_camera_keys: list[str],
+        visualization_camera_keys: list[str],
         action_dim: int,
         teleop_device: str,
         append: bool,
@@ -256,6 +285,8 @@ class HDF5TeleopRecorder:
         self.fps = fps
         self.joint_names = joint_names
         self.camera_keys = camera_keys
+        self.training_camera_keys = training_camera_keys
+        self.visualization_camera_keys = visualization_camera_keys
         self.action_dim = action_dim
         self.teleop_device = teleop_device
         self.compression = None if compression == "none" else compression
@@ -294,9 +325,13 @@ class HDF5TeleopRecorder:
         metadata.attrs["teleop_device"] = self.teleop_device
         metadata.attrs["created_unix_ns"] = int(time.time_ns())
         write_json_attr(metadata, "camera_keys", self.camera_keys)
+        write_json_attr(metadata, "training_camera_keys", self.training_camera_keys)
+        write_json_attr(metadata, "visualization_camera_keys", self.visualization_camera_keys)
         write_json_attr(metadata, "joint_names", self.joint_names)
         write_json_attr(metadata, "render_config", render_config)
         write_string_dataset(metadata, "camera_keys", self.camera_keys)
+        write_string_dataset(metadata, "training_camera_keys", self.training_camera_keys)
+        write_string_dataset(metadata, "visualization_camera_keys", self.visualization_camera_keys)
         write_string_dataset(metadata, "joint_names", self.joint_names)
 
         self._data_group.attrs["env_args"] = json.dumps(
@@ -305,6 +340,8 @@ class HDF5TeleopRecorder:
                 "type": "lwh_isaaclab_hdf5_v1",
                 "fps": int(self.fps),
                 "camera_keys": self.camera_keys,
+                "training_camera_keys": self.training_camera_keys,
+                "visualization_camera_keys": self.visualization_camera_keys,
                 "teleop_device": self.teleop_device,
             },
             ensure_ascii=False,
@@ -333,6 +370,8 @@ class HDF5TeleopRecorder:
         group.attrs["num_samples"] = 0
         group.attrs["started_unix_ns"] = int(time.time_ns())
         write_json_attr(group, "camera_keys", self.camera_keys)
+        write_json_attr(group, "training_camera_keys", self.training_camera_keys)
+        write_json_attr(group, "visualization_camera_keys", self.visualization_camera_keys)
         write_json_attr(group, "joint_names", self.joint_names)
         self._write_static_nested(group.require_group("initial_state"), initial_state)
 
@@ -411,6 +450,8 @@ class HDF5TeleopRecorder:
                 cube.data.root_vel_w,
                 squeeze_first_env=True,
             ).astype(np.float32, copy=False)
+            frame["observation/env_state/object_root_pose"] = frame["observation/env_state/cube_root_pose"]
+            frame["observation/env_state/object_root_velocity"] = frame["observation/env_state/cube_root_velocity"]
 
         for key, value in frame.items():
             self._append_dataset(key, value)
@@ -581,7 +622,7 @@ def read_render_config(env) -> dict[str, Any]:
     aa_names = {0: "Off", 1: "TAA", 2: "FXAA", 3: "DLSS", 4: "DLAA"}
     dlss_names = {0: "performance", 1: "balanced", 2: "quality", 3: "auto"}
     camera_hz: dict[str, float] = {}
-    for camera_key in ("front", "wrist"):
+    for camera_key in ("front", "wrist", "overview"):
         if camera_key in env.scene.keys():
             camera_hz[camera_key] = float(1.0 / env.scene[camera_key].cfg.update_period)
     return {
@@ -611,6 +652,13 @@ def validate_hdf5_recording(path: Path, *, expected_camera_keys: list[str], expe
             raise AssertionError(f"Unexpected task metadata: {metadata.attrs['task']}")
         if int(metadata.attrs["fps"]) != 30:
             raise AssertionError(f"Unexpected HDF5 fps metadata: {metadata.attrs['fps']}")
+        metadata_camera_keys = read_string_dataset(metadata, "camera_keys") or []
+        if metadata_camera_keys and metadata_camera_keys != expected_camera_keys:
+            raise AssertionError(f"Unexpected camera_keys metadata: {metadata_camera_keys}")
+        training_camera_keys = read_string_dataset(metadata, "training_camera_keys") or []
+        expected_training_camera_keys = [key for key in expected_camera_keys if key in ("front", "wrist")]
+        if training_camera_keys and training_camera_keys != expected_training_camera_keys:
+            raise AssertionError(f"Unexpected training_camera_keys metadata: {training_camera_keys}")
 
         summaries: list[dict[str, Any]] = []
         expected_success = [True, False]
@@ -671,9 +719,7 @@ def main() -> None:
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.use_teleop_device(args_cli.teleop_device)
     env_cfg.recorders = None
-    if args_cli.camera_mode == "front":
-        delete_attribute(env_cfg.scene, "wrist")
-        delete_attribute(env_cfg.observations.policy, "wrist")
+    configure_camera_mode(env_cfg, args_cli.camera_mode)
     if args_cli.ground_mode == "off":
         delete_attribute(env_cfg.scene, "ground")
     env_cfg.sim.render_interval = args_cli.teleop_render_interval
@@ -751,12 +797,18 @@ def main() -> None:
         camera_keys = ["front"]
         if "wrist" in env.scene.keys():
             camera_keys.append("wrist")
+        if "overview" in env.scene.keys():
+            camera_keys.append("overview")
+        training_camera_keys = [key for key in camera_keys if key in ("front", "wrist")]
+        visualization_camera_keys = [key for key in camera_keys if key not in training_camera_keys]
         recorder = HDF5TeleopRecorder(
             args_cli.output,
             task=args_cli.task,
             fps=30,
             joint_names=list(env.scene["robot"].joint_names),
             camera_keys=camera_keys,
+            training_camera_keys=training_camera_keys,
+            visualization_camera_keys=visualization_camera_keys,
             action_dim=int(env.action_manager.total_action_dim),
             teleop_device=args_cli.teleop_device,
             append=args_cli.append,
@@ -770,7 +822,8 @@ def main() -> None:
         print(
             f"LWH_RECORD_READY task={args_cli.task} output={args_cli.output} "
             f"teleop_device={args_cli.teleop_device} camera_mode={args_cli.camera_mode} "
-            f"camera_keys={camera_keys} control_hz=60.0 fps=30",
+            f"camera_keys={camera_keys} training_camera_keys={training_camera_keys} "
+            f"visualization_camera_keys={visualization_camera_keys} control_hz=60.0 fps=30",
             flush=True,
         )
         print(

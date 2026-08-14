@@ -45,8 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera_mode",
         default="front",
-        choices=["front", "dual"],
-        help="Camera set for simulation observations. front is the high-frequency teleop baseline; dual enables front+wrist.",
+        choices=["front", "dual", "triple"],
+        help=(
+            "Camera set for simulation observations. front uses only front; dual uses front+wrist; "
+            "triple also enables overview for visual inspection."
+        ),
     )
     parser.add_argument(
         "--ground_mode",
@@ -179,6 +182,21 @@ def delete_attribute(obj, attr_name: str) -> None:
         delattr(obj, attr_name)
 
 
+def configure_camera_mode(env_cfg, camera_mode: str) -> None:
+    """按入口参数裁剪相机；overview 只作为观察视角，不是默认训练视角。"""
+    if camera_mode == "front":
+        for attr_name in ("wrist", "overview"):
+            delete_attribute(env_cfg.scene, attr_name)
+            delete_attribute(env_cfg.observations.policy, attr_name)
+    elif camera_mode == "dual":
+        delete_attribute(env_cfg.scene, "overview")
+        delete_attribute(env_cfg.observations.policy, "overview")
+    elif camera_mode == "triple":
+        return
+    else:
+        raise ValueError(f"Unsupported camera mode: {camera_mode}")
+
+
 def write_process_status(status: str) -> None:
     """在 Kit 关闭进程前向 Python 监督进程写入最终状态。"""
     status_path = os.environ.get("LWH_VALIDATION_STATUS_FILE")
@@ -233,9 +251,10 @@ def read_render_config(env) -> dict[str, object]:
     dlss_value = int(settings.get("/rtx/post/dlss/execMode"))
     aa_names = {0: "Off", 1: "TAA", 2: "FXAA", 3: "DLSS", 4: "DLAA"}
     dlss_names = {0: "performance", 1: "balanced", 2: "quality", 3: "auto"}
-    camera_hz = {"front": float(1.0 / env.scene["front"].cfg.update_period)}
-    if "wrist" in env.scene.keys():
-        camera_hz["wrist"] = float(1.0 / env.scene["wrist"].cfg.update_period)
+    camera_hz = {}
+    for camera_key in ("front", "wrist", "overview"):
+        if camera_key in env.scene.keys():
+            camera_hz[camera_key] = float(1.0 / env.scene[camera_key].cfg.update_period)
     return {
         "preset": args_cli.rendering_mode,
         "antialiasing": aa_names.get(aa_value, f"unknown-{aa_value}"),
@@ -282,9 +301,7 @@ def main() -> None:
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.use_teleop_device(args_cli.teleop_device)
     env_cfg.recorders = None
-    if args_cli.camera_mode == "front":
-        delete_attribute(env_cfg.scene, "wrist")
-        delete_attribute(env_cfg.observations.policy, "wrist")
+    configure_camera_mode(env_cfg, args_cli.camera_mode)
     if args_cli.ground_mode == "off":
         # LeIsaac LiftCube 的桌面任务没有额外大地面；去掉 ground 可显著降低 GUI 渲染负担。
         delete_attribute(env_cfg.scene, "ground")
@@ -488,6 +505,8 @@ def main() -> None:
             camera_names = ["front"]
             if "wrist" in latest_policy_observation:
                 camera_names.append("wrist")
+            if "overview" in latest_policy_observation:
+                camera_names.append("overview")
             camera_observations = {
                 name: validate_camera_observation(latest_policy_observation[name])
                 for name in camera_names

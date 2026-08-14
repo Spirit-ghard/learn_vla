@@ -24,8 +24,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera_mode",
         default="dual",
-        choices=["front", "dual"],
-        help="Camera set to validate. front disables wrist; dual validates front+wrist.",
+        choices=["front", "dual", "triple"],
+        help="Camera set to validate. front disables wrist/overview; dual validates front+wrist; triple adds overview.",
     )
     parser.add_argument("--steps", type=int, default=600, help="Number of control steps before the reset test.")
     parser.add_argument(
@@ -81,6 +81,21 @@ def delete_attribute(obj, attr_name: str) -> None:
         delattr(obj, attr_name)
 
 
+def configure_camera_mode(env_cfg, camera_mode: str) -> None:
+    """按验证参数裁剪相机，保持和正式入口一致。"""
+    if camera_mode == "front":
+        for attr_name in ("wrist", "overview"):
+            delete_attribute(env_cfg.scene, attr_name)
+            delete_attribute(env_cfg.observations.policy, attr_name)
+    elif camera_mode == "dual":
+        delete_attribute(env_cfg.scene, "overview")
+        delete_attribute(env_cfg.observations.policy, "overview")
+    elif camera_mode == "triple":
+        return
+    else:
+        raise ValueError(f"Unsupported camera mode: {camera_mode}")
+
+
 def image_report(image: torch.Tensor, output_path: Path) -> dict[str, object]:
     """校验一批相机图像并保存第一个环境的 RGB 样图。"""
     if image.ndim != 4 or image.shape[0] < 1 or image.shape[-1] < 3:
@@ -129,9 +144,7 @@ def main() -> None:
     # 这里只配置仿真动作空间，不创建键盘设备，也不访问真实机器人。
     env_cfg.use_teleop_device("keyboard")
     env_cfg.recorders = None
-    if args_cli.camera_mode == "front":
-        delete_attribute(env_cfg.scene, "wrist")
-        delete_attribute(env_cfg.observations.policy, "wrist")
+    configure_camera_mode(env_cfg, args_cli.camera_mode)
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     progress("environment-created")
@@ -140,8 +153,10 @@ def main() -> None:
         progress("initial-reset-complete")
         policy_obs = observations["policy"]
         required_terms = {"joint_pos", "joint_vel", "front"}
-        if args_cli.camera_mode == "dual":
+        if args_cli.camera_mode in ("dual", "triple"):
             required_terms.add("wrist")
+        if args_cli.camera_mode == "triple":
+            required_terms.add("overview")
         missing_terms = required_terms.difference(policy_obs)
         if missing_terms:
             raise AssertionError(f"Missing policy observations: {sorted(missing_terms)}")
@@ -182,8 +197,11 @@ def main() -> None:
 
         front = image_report(policy_obs["front"], args_cli.output_dir / "front.png")
         wrist = None
-        if args_cli.camera_mode == "dual":
+        overview = None
+        if args_cli.camera_mode in ("dual", "triple"):
             wrist = image_report(policy_obs["wrist"], args_cli.output_dir / "wrist.png")
+        if args_cli.camera_mode == "triple":
+            overview = image_report(policy_obs["overview"], args_cli.output_dir / "overview.png")
         progress("camera-samples-saved")
 
         # 先把方块移开，再调用环境 reset，验证默认 reset_scene_to_default 事件。
@@ -199,11 +217,16 @@ def main() -> None:
         reset_position = cube.data.root_pos_w.clone()
         if torch.linalg.vector_norm(displaced_position - reset_position, dim=1).min() < 0.05:
             raise AssertionError("Cube displacement was too small to validate reset behavior.")
-        if not torch.allclose(reset_position, initial_cube_state[:, :3], atol=2.0e-3, rtol=0.0):
+        default_position = cube.data.default_root_state[:, :3] + env.scene.env_origins
+        xy_randomization_m = float(getattr(env.cfg, "object_xy_randomization_m", 0.025))
+        xy_error = torch.abs(reset_position[:, :2] - default_position[:, :2])
+        z_error = torch.abs(reset_position[:, 2] - default_position[:, 2])
+        if bool(torch.any(xy_error > xy_randomization_m + 0.005)) or bool(torch.any(z_error > 0.005)):
             raise AssertionError(
-                f"Cube did not reset: expected={initial_cube_state[:, :3]}, actual={reset_position}"
+                f"Object did not reset inside the randomized range: "
+                f"default={default_position}, actual={reset_position}, xy_error={xy_error}, z_error={z_error}"
             )
-        progress("cube-reset-validated")
+        progress("object-randomized-reset-validated")
 
         report = {
             "status": "passed",
@@ -224,12 +247,16 @@ def main() -> None:
             "cube_settled_position_m": settled_cube_state[0, :3].cpu().tolist(),
             "cube_displaced_position_m": displaced_position[0].cpu().tolist(),
             "cube_reset_position_m": reset_position[0].cpu().tolist(),
+            "object_default_position_m": default_position[0].cpu().tolist(),
+            "object_xy_randomization_m": xy_randomization_m,
             "gripper_position_m": gripper_position[0].cpu().tolist(),
             "gripper_quaternion_wxyz": gripper_quaternion[0].cpu().tolist(),
             "front_camera": front,
         }
         if wrist is not None:
             report["wrist_camera"] = wrist
+        if overview is not None:
+            report["overview_camera"] = overview
         report_path = args_cli.output_dir / "report.json"
         report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2, ensure_ascii=False), flush=True)

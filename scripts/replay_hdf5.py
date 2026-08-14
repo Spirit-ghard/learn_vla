@@ -59,8 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera_mode",
         default="dual",
-        choices=["auto", "front", "dual"],
-        help="Camera set. dual is the replay default so front+wrist can be inspected together.",
+        choices=["auto", "front", "dual", "triple"],
+        help="Camera set. dual is the replay default; triple also enables the overview sensor.",
     )
     parser.add_argument(
         "--viewer_layout",
@@ -143,6 +143,21 @@ def delete_attribute(obj, attr_name: str) -> None:
     """按回放参数移除不需要的 scene/observation 配置项。"""
     if hasattr(obj, attr_name):
         delattr(obj, attr_name)
+
+
+def configure_camera_mode(env_cfg, camera_mode: str) -> None:
+    """回放默认只启用 front+wrist；overview 主要给 HDF5/Web viewer 检查。"""
+    if camera_mode == "front":
+        for attr_name in ("wrist", "overview"):
+            delete_attribute(env_cfg.scene, attr_name)
+            delete_attribute(env_cfg.observations.policy, attr_name)
+    elif camera_mode == "dual":
+        delete_attribute(env_cfg.scene, "overview")
+        delete_attribute(env_cfg.observations.policy, "overview")
+    elif camera_mode == "triple":
+        return
+    else:
+        raise ValueError(f"Unsupported camera mode: {camera_mode}")
 
 
 def read_json_string_list(group: h5py.Group, key: str) -> list[str]:
@@ -532,14 +547,17 @@ def main() -> None:
 
         camera_mode = args_cli.camera_mode
         if camera_mode == "auto":
-            camera_mode = "dual" if "wrist" in dataset.camera_keys else "front"
+            if "overview" in dataset.camera_keys:
+                camera_mode = "triple"
+            elif "wrist" in dataset.camera_keys:
+                camera_mode = "dual"
+            else:
+                camera_mode = "front"
 
         env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
         env_cfg.use_teleop_device(teleop_device)
         env_cfg.recorders = None
-        if camera_mode == "front":
-            delete_attribute(env_cfg.scene, "wrist")
-            delete_attribute(env_cfg.observations.policy, "wrist")
+        configure_camera_mode(env_cfg, camera_mode)
         if args_cli.ground_mode == "off":
             delete_attribute(env_cfg.scene, "ground")
         env_cfg.sim.render_interval = args_cli.teleop_render_interval

@@ -27,7 +27,7 @@ from . import mdp
 
 @configclass
 class LwhSO101TableSceneCfg(InteractiveSceneCfg):
-    """SO101、桌面、方块、地面、灯光和双相机的场景配置。"""
+    """SO101、桌面、可抓取物体、地面、灯光和相机的场景配置。"""
 
     robot: ArticulationCfg = SO101_FOLLOWER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -84,6 +84,26 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
         update_period=1 / 30.0,
     )
 
+    overview: TiledCameraCfg = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/OverviewCamera",
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.05, -1.05, 0.60),
+            rot=(0.460084, -0.865388, 0.175324, -0.093211),
+            convention="ros",
+        ),
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=20.0,
+            focus_distance=400.0,
+            horizontal_aperture=38.11,
+            clipping_range=(0.01, 50.0),
+            lock_camera=True,
+        ),
+        width=640,
+        height=480,
+        update_period=1 / 30.0,
+    )
+
     ground = AssetBaseCfg(
         prim_path="/World/GroundPlane",
         spawn=sim_utils.GroundPlaneCfg(
@@ -104,22 +124,24 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
     )
 
     cube: RigidObjectCfg = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Cube",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.35, -0.34, 0.065), rot=(1.0, 0.0, 0.0, 0.0)),
-        spawn=sim_utils.CuboidCfg(
-            size=(0.04, 0.04, 0.04),
+        prim_path="{ENV_REGEX_NS}/Banana",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.35, -0.34, 0.062), rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=sim_utils.CapsuleCfg(
+            radius=0.018,
+            height=0.10,
+            axis="Y",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=1,
                 max_linear_velocity=1000.0,
                 max_angular_velocity=1000.0,
-                max_depenetration_velocity=5.0,
+                max_depenetration_velocity=3.0,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.04),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.035),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.05, 0.04), roughness=0.55),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=0.8),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.95, 0.78, 0.12), roughness=0.65),
         ),
     )
 
@@ -139,14 +161,24 @@ class LwhSO101ActionsCfg:
 
 @configclass
 class LwhSO101EventCfg:
-    """默认 reset 行为：所有 IsaacLab scene asset 回到配置初始状态。"""
+    """默认 reset 行为：先恢复场景，再轻微随机化可抓取物体位置。"""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
+    randomize_object_xy = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            # 只扰动桌面上的 XY 初始位置，幅度保持很小，避免采集任务目标漂得太远。
+            "pose_range": {"x": (-0.025, 0.025), "y": (-0.025, 0.025)},
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("cube"),
+        },
+    )
 
 
 @configclass
 class LwhSO101ObservationsCfg:
-    """Policy 观测契约：关节状态、双相机图像、末端状态和上一帧动作。"""
+    """Policy 观测契约：关节状态、相机图像、末端状态和上一帧动作。"""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -162,6 +194,10 @@ class LwhSO101ObservationsCfg:
         front = ObsTerm(
             func=mdp.image,
             params={"sensor_cfg": SceneEntityCfg("front"), "data_type": "rgb", "normalize": False},
+        )
+        overview = ObsTerm(
+            func=mdp.image,
+            params={"sensor_cfg": SceneEntityCfg("overview"), "data_type": "rgb", "normalize": False},
         )
         ee_frame_state = ObsTerm(
             func=mdp.ee_frame_state,
@@ -203,7 +239,8 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
     dynamic_reset_gripper_effort_limit: bool = False
     robot_name: str = "so101_follower"
     default_feature_joint_names: list[str] = MISSING
-    task_description: str = "Manipulate the red cube on the table."
+    object_xy_randomization_m: float = 0.025
+    task_description: str = "Grasp the yellow banana-like capsule on the table."
 
     def __post_init__(self) -> None:
         super().__post_init__()
