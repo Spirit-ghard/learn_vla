@@ -17,8 +17,11 @@ git checkout stage_4
 
 常用流程：
 
-```bash
+```bash 
+启动录制
 python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --camera_mode triple --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
+```
+```
 conda activate lerobot05
 python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
 python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
