@@ -430,7 +430,7 @@ class HDF5TeleopRecorder:
                 raise KeyError(f"Camera observation '{camera_key}' is missing from policy observations.")
             frame[f"observation/images/{camera_key}"] = normalize_image(policy_observation[camera_key])
 
-        # 录制环境状态便于后续回放验证方块轨迹；训练转换默认只使用 state/image/action。
+        # 录制环境状态便于后续回放验证物体轨迹；训练转换默认只使用 state/image/action。
         robot = env.scene["robot"]
         frame["observation/env_state/robot_joint_position"] = numpy_from_value(
             robot.data.joint_pos,
@@ -440,18 +440,24 @@ class HDF5TeleopRecorder:
             robot.data.joint_vel,
             squeeze_first_env=True,
         ).astype(np.float32, copy=False)
-        if "cube" in env.scene.keys():
-            cube = env.scene["cube"]
-            frame["observation/env_state/cube_root_pose"] = numpy_from_value(
-                cube.data.root_pose_w,
+        # banana 是兼容旧数据的 scene key；当前几何是可抓取棍子。
+        for object_key in ("banana", "cube"):
+            if object_key not in env.scene.keys():
+                continue
+            object_asset = env.scene[object_key]
+            frame[f"observation/env_state/{object_key}_root_pose"] = numpy_from_value(
+                object_asset.data.root_pose_w,
                 squeeze_first_env=True,
             ).astype(np.float32, copy=False)
-            frame["observation/env_state/cube_root_velocity"] = numpy_from_value(
-                cube.data.root_vel_w,
+            frame[f"observation/env_state/{object_key}_root_velocity"] = numpy_from_value(
+                object_asset.data.root_vel_w,
                 squeeze_first_env=True,
             ).astype(np.float32, copy=False)
-            frame["observation/env_state/object_root_pose"] = frame["observation/env_state/cube_root_pose"]
-            frame["observation/env_state/object_root_velocity"] = frame["observation/env_state/cube_root_velocity"]
+            frame["observation/env_state/object_root_pose"] = frame[f"observation/env_state/{object_key}_root_pose"]
+            frame["observation/env_state/object_root_velocity"] = frame[
+                f"observation/env_state/{object_key}_root_velocity"
+            ]
+            break
 
         for key, value in frame.items():
             self._append_dataset(key, value)

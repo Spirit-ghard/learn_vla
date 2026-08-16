@@ -4,7 +4,7 @@
 
 项目只运行 IsaacLab 仿真，不控制真实 follower。`--teleop_device so101leader` 只读取真实 SO101 Leader 作为仿真输入。
 
-场景物体已经从红色方块替换为黄色长条胶囊体，形状更容易被 SO101 夹爪夹住。每次 reset 会在桌面 XY 方向做约 `±2.5cm` 的轻微随机化，用于提升数据覆盖，但不会把目标随机到操作区域外。
+场景物体当前使用黄色胶囊棍子，并在桌面上加入低矮放置托盘。每次 reset 会在桌面 XY 方向对可抓取物体做约 `±3cm` 的轻微随机化，用于提升数据覆盖，但不会把目标随机到操作区域外或撞到托盘。
 
 ## 使用方式
 
@@ -17,14 +17,24 @@ git checkout stage_4
 
 常用流程：
 
+#### 1.启动录制
 ```bash 
-启动录制
+conda activate isaac
 python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --camera_mode triple --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
 ```
-```
+#### 2.数据转换
+```bash
 conda activate lerobot05
 python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
+```
+#### 3.sim回放数据
+```
+conda activate lerobot05
 python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+#### 4.web可视化数据
+```
+conda activate lerobot05
 python3 scripts/view_hdf5_web.py --file datasets/hdf5/lwh_so101_table_leader.hdf5 --port 7860
 ```
 
@@ -91,7 +101,7 @@ python3 scripts/calibrate_so101.py --arm follower --calibrate --port /dev/ttyACM
 python3 scripts/calibrate_so101_leader.py --inspect
 ```
 
-## 数据契约
+## 画面参数
 
 ```text
 front camera: 640 x 480, 30 FPS

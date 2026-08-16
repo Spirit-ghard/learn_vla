@@ -17,4 +17,8 @@ dependencies = [
 where = ["source/lwh_isaaclab_tasks"]
 
 [tool.setuptools.package-data]
-lwh_isaaclab_tasks = ["assets/robots/*.usd"]
+lwh_isaaclab_tasks = [
+    "assets/robots/*.usd",
+    "assets/props/*.usd",
+    "assets/props/Materials/Textures/*.png",
+]

@@ -4,6 +4,8 @@
 """
 
 __all__ = [
+    "banana_cfg",
+    "banana_usd_path",
     "SO101_FOLLOWER_CFG",
     "SO101_FOLLOWER_JOINT_LIMITS_DEG",
     "SO101_JOINT_NAMES",
@@ -25,4 +27,8 @@ def __getattr__(name: str):
         from .so101 import SO101_FOLLOWER_CFG, SO101_SIM_ASSET_PATH
 
         return {"SO101_FOLLOWER_CFG": SO101_FOLLOWER_CFG, "SO101_SIM_ASSET_PATH": SO101_SIM_ASSET_PATH}[name]
+    if name in ("banana_cfg", "banana_usd_path"):
+        from .banana import banana_cfg, banana_usd_path
+
+        return {"banana_cfg": banana_cfg, "banana_usd_path": banana_usd_path}[name]
     raise AttributeError(name)

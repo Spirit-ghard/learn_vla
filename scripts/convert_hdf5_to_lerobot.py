@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 
 
-DEFAULT_TASK_DESCRIPTION = "Grasp the yellow banana-like capsule on the table."
+DEFAULT_TASK_DESCRIPTION = "Move the rod into the placement tray."
 
 
 def parse_args() -> argparse.Namespace:

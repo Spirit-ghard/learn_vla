@@ -168,8 +168,8 @@ def main() -> None:
             raise AssertionError(f"Unexpected joint state shape: {tuple(policy_obs['joint_pos'].shape)}")
         progress("observation-contract-validated")
 
-        cube = env.scene["cube"]
-        initial_cube_state = cube.data.root_state_w.clone()
+        object_asset = env.scene["banana"]
+        initial_object_state = object_asset.data.root_state_w.clone()
         action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             dtype=torch.float32,
@@ -184,12 +184,12 @@ def main() -> None:
             max_abs_joint_position = max(max_abs_joint_position, float(policy_obs["joint_pos"].abs().max()))
         progress(f"simulation-steps-complete count={args_cli.steps}")
 
-        settled_cube_state = cube.data.root_state_w.clone()
-        if not torch.isfinite(settled_cube_state).all():
-            raise AssertionError("Cube state contains NaN or Inf values.")
-        # 桌面顶面约为 z=0.041 m，3 cm 方块中心稳定高度应高于该位置。
-        if float(settled_cube_state[0, 2]) < 0.050:
-            raise AssertionError(f"Cube fell through the table: z={float(settled_cube_state[0, 2]):.6f}")
+        settled_object_state = object_asset.data.root_state_w.clone()
+        if not torch.isfinite(settled_object_state).all():
+            raise AssertionError("Object state contains NaN or Inf values.")
+        # 桌面顶面约为 z=0.04 m。
+        if float(settled_object_state[0, 2]) < 0.045:
+            raise AssertionError(f"Object fell through the table: z={float(settled_object_state[0, 2]):.6f}")
 
         gripper_ids, _ = robot.find_bodies("gripper")
         gripper_position = robot.data.body_pos_w[:, gripper_ids[0]].clone()
@@ -204,20 +204,20 @@ def main() -> None:
             overview = image_report(policy_obs["overview"], args_cli.output_dir / "overview.png")
         progress("camera-samples-saved")
 
-        # 先把方块移开，再调用环境 reset，验证默认 reset_scene_to_default 事件。
-        displaced_state = settled_cube_state.clone()
+        # 先把物体移开，再调用环境 reset。
+        displaced_state = settled_object_state.clone()
         displaced_state[:, 0] += 0.12
         displaced_state[:, 2] += 0.08
         displaced_state[:, 7:] = 0.0
-        cube.write_root_state_to_sim(displaced_state)
+        object_asset.write_root_state_to_sim(displaced_state)
         env.step(action)
-        displaced_position = cube.data.root_pos_w.clone()
+        displaced_position = object_asset.data.root_pos_w.clone()
 
         env.reset()
-        reset_position = cube.data.root_pos_w.clone()
+        reset_position = object_asset.data.root_pos_w.clone()
         if torch.linalg.vector_norm(displaced_position - reset_position, dim=1).min() < 0.05:
-            raise AssertionError("Cube displacement was too small to validate reset behavior.")
-        default_position = cube.data.default_root_state[:, :3] + env.scene.env_origins
+            raise AssertionError("Object displacement was too small to validate reset behavior.")
+        default_position = object_asset.data.default_root_state[:, :3] + env.scene.env_origins
         xy_randomization_m = float(getattr(env.cfg, "object_xy_randomization_m", 0.025))
         xy_error = torch.abs(reset_position[:, :2] - default_position[:, :2])
         z_error = torch.abs(reset_position[:, 2] - default_position[:, 2])
@@ -243,10 +243,10 @@ def main() -> None:
             "joint_names": list(robot.joint_names),
             "joint_position_shape": list(policy_obs["joint_pos"].shape),
             "max_abs_joint_position_rad": max_abs_joint_position,
-            "cube_initial_position_m": initial_cube_state[0, :3].cpu().tolist(),
-            "cube_settled_position_m": settled_cube_state[0, :3].cpu().tolist(),
-            "cube_displaced_position_m": displaced_position[0].cpu().tolist(),
-            "cube_reset_position_m": reset_position[0].cpu().tolist(),
+            "object_initial_position_m": initial_object_state[0, :3].cpu().tolist(),
+            "object_settled_position_m": settled_object_state[0, :3].cpu().tolist(),
+            "object_displaced_position_m": displaced_position[0].cpu().tolist(),
+            "object_reset_position_m": reset_position[0].cpu().tolist(),
             "object_default_position_m": default_position[0].cpu().tolist(),
             "object_xy_randomization_m": xy_randomization_m,
             "gripper_position_m": gripper_position[0].cpu().tolist(),

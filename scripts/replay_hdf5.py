@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Compare replayed robot/cube state and camera validity against recorded data when available.",
+        help="Compare replayed robot/object state and camera validity against recorded data when available.",
     )
     parser.add_argument(
         "--teleop_render_interval",
@@ -182,6 +182,36 @@ def read_nested_tensor_tree(group: h5py.Group, device: str) -> dict[str, Any]:
     return state
 
 
+def filter_initial_state_for_scene(env, state: dict[str, Any]) -> dict[str, Any]:
+    """让录制状态与当前场景资产对齐，兼容旧 cube 数据和当前物体场景。"""
+    scene_assets = {
+        "articulation": set(env.scene.articulations.keys()),
+        "rigid_object": set(env.scene.rigid_objects.keys()),
+        "deformable_object": set(env.scene.deformable_objects.keys()),
+    }
+    filtered: dict[str, Any] = {}
+    for category, category_state in state.items():
+        if not isinstance(category_state, dict):
+            filtered[category] = category_state
+            continue
+        known_assets = scene_assets.get(category, set())
+        if not known_assets:
+            filtered[category] = category_state
+            continue
+        kept = {name: asset_state for name, asset_state in category_state.items() if name in known_assets}
+        if kept:
+            filtered[category] = kept
+
+    current_state = env.scene.get_state(is_relative=True)
+    for category, category_state in current_state.items():
+        if not isinstance(category_state, dict) or not scene_assets.get(category):
+            continue
+        filtered.setdefault(category, {})
+        for name, asset_state in category_state.items():
+            filtered[category].setdefault(name, asset_state)
+    return filtered
+
+
 def get_nested_dataset(group: h5py.Group, path: str) -> h5py.Dataset:
     current: h5py.Group | h5py.Dataset = group
     for part in path.split("/"):
@@ -214,7 +244,7 @@ def rgb_tensor_to_numpy(value: torch.Tensor | np.ndarray | None, *, fallback_sha
 class ReplayTriView:
     """回放专用三画面窗口：上排双相机，下排主视角。"""
 
-    def __init__(self, *, width: int = 1280, height: int = 920) -> None:
+    def __init__(self, *, main_label: str = "Main View", width: int = 1280, height: int = 920) -> None:
         self._providers = {
             "front": ui.ByteImageProvider(),
             "wrist": ui.ByteImageProvider(),
@@ -234,8 +264,8 @@ class ReplayTriView:
                 with ui.HStack(height=ui.Percent(40), spacing=4):
                     self._build_image_cell("Front", self._providers["front"])
                     self._build_image_cell("Wrist", self._providers["wrist"])
-                # 下排显示 Isaac viewer 主视角，便于同时确认机器人、桌面和方块全局轨迹。
-                self._build_image_cell("Main View", self._providers["main"], height=ui.Percent(60))
+                # 下排显示 overview 第三视角（triple 模式）或 Isaac viewer 主视角。
+                self._build_image_cell(main_label, self._providers["main"], height=ui.Percent(60))
         self.update(front=None, wrist=None, main=None)
 
     @staticmethod
@@ -354,12 +384,12 @@ class EpisodePlayback:
 
 
 class ReplayVerifier:
-    """运行时回放检查：关节、方块和相机是否基本有效。"""
+    """运行时回放检查：关节、任务物体和相机是否基本有效。"""
 
     def __init__(self) -> None:
         self.frames = 0
         self.max_joint_error = 0.0
-        self.max_cube_position_error = 0.0
+        self.max_object_position_error = 0.0
         self.min_camera_std: float | None = None
 
     def update(self, env, episode: EpisodePlayback, observations: dict[str, torch.Tensor]) -> None:
@@ -377,19 +407,19 @@ class ReplayVerifier:
         joint_error = torch.max(torch.abs(robot.data.joint_pos[0] - recorded)).item()
         self.max_joint_error = max(self.max_joint_error, float(joint_error))
 
-        if "cube" in env.scene.keys() and "observation/env_state/cube_root_pose" in group:
-            cube = env.scene["cube"]
-            recorded_cube_pose = torch.as_tensor(
-                group["observation/env_state/cube_root_pose"][index],
-                device=env.device,
-                dtype=torch.float32,
-            )
-            cube_error = torch.linalg.vector_norm(cube.data.root_pose_w[0, :3] - recorded_cube_pose[:3]).item()
-            self.max_cube_position_error = max(self.max_cube_position_error, float(cube_error))
+        for object_key in ("banana", "cube"):
+            pose_path = f"observation/env_state/{object_key}_root_pose"
+            if object_key in env.scene.keys() and pose_path in group:
+                object_asset = env.scene[object_key]
+                recorded_pose = torch.as_tensor(group[pose_path][index], device=env.device, dtype=torch.float32)
+                object_error = torch.linalg.vector_norm(
+                    object_asset.data.root_pose_w[0, :3] - recorded_pose[:3]
+                ).item()
+                self.max_object_position_error = max(self.max_object_position_error, float(object_error))
 
         policy_obs = observations.get("policy", {})
         for key, value in policy_obs.items():
-            if isinstance(value, torch.Tensor) and key in ("front", "wrist"):
+            if isinstance(value, torch.Tensor) and key in ("front", "wrist", "overview"):
                 std = float(value[0, ..., :3].float().std())
                 self.min_camera_std = std if self.min_camera_std is None else min(self.min_camera_std, std)
         self.frames += 1
@@ -398,7 +428,7 @@ class ReplayVerifier:
         return {
             "frames": self.frames,
             "max_joint_error_rad": self.max_joint_error,
-            "max_cube_position_error_m": self.max_cube_position_error,
+            "max_object_position_error_m": self.max_object_position_error,
             "min_camera_std": self.min_camera_std,
         }
 
@@ -487,10 +517,11 @@ def update_replay_view(view: ReplayTriView | None, env, observations: dict[str, 
     if view is None:
         return
     policy_obs = observations.get("policy", {}) if observations is not None else {}
+    main = policy_obs.get("overview") if "overview" in policy_obs else render_main_view(env)
     view.update(
         front=policy_obs.get("front"),
         wrist=policy_obs.get("wrist"),
-        main=render_main_view(env),
+        main=main,
     )
 
 
@@ -499,6 +530,7 @@ def load_episode(env, dataset: HDF5ReplayFile, episode_index: int) -> tuple[Epis
     if "initial_state" not in group:
         raise KeyError(f"Episode {episode_index} has no initial_state group.")
     initial_state = read_nested_tensor_tree(group["initial_state"], env.device)
+    initial_state = filter_initial_state_for_scene(env, initial_state)
     observations, _ = env.reset_to(initial_state, None, is_relative=True)
     env.sim.render()
     actions = get_nested_dataset(group, args_cli.action_key)
@@ -579,7 +611,8 @@ def main() -> None:
             controls = ReplayKeyboard(paused=not args_cli.autoplay)
             controls.display_controls()
             if args_cli.viewer_layout == "tri":
-                replay_view = ReplayTriView()
+                main_label = "Overview" if camera_mode == "triple" else "Main View"
+                replay_view = ReplayTriView(main_label=main_label)
                 update_replay_view(replay_view, env, observations)
         paused = not args_cli.autoplay
         total_replayed_frames = 0

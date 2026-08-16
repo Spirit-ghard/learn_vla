@@ -18,16 +18,78 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg, OffsetCfg, TiledCameraCfg
 from isaaclab.utils import configclass
+import isaaclab.utils.math as math_utils
 
 from lwh_isaaclab_tasks.assets import SO101_FOLLOWER_CFG, SO101_JOINT_NAMES
 from lwh_isaaclab_tasks.devices.so101_leader import normalized_positions_to_sim_radians
 
 from . import mdp
 
+# overview 相机位置
+overview_eye = (0.80, 0.08, 1.00)
+# overview 相机注视点
+overview_target = (0.32, -0.34, 0.06)
+
+# 可抓取棍子初始位置
+object_init_pos = (0.18, -0.34, 0.062)
+# 可抓取棍子初始姿态（绕 z 顺时针 90°，棍身由沿 y 转到沿 x）
+object_init_rot = (0.70710678, 0.0, 0.0, -0.70710678)
+# 可抓取棍子半径（0.018 × 0.7）
+object_radius = 0.0126
+# 可抓取棍子长度
+object_length = 0.10
+# 可抓取棍子质量
+object_mass = 0.035
+
+# 放置框中心位置
+placement_box_center = (0.43, -0.34)
+# 放置框内部尺寸
+placement_box_inner_size = (0.13, 0.12)
+# 放置框边缘厚度
+placement_box_wall_thickness = 0.012
+# 放置框边缘高度
+placement_box_wall_height = 0.028 * 3.0
+# 放置框底板厚度
+placement_box_pad_thickness = 0.002
+# 桌面上表面高度
+table_top_z = 0.04
+
+
+def look_at_quat(eye: tuple[float, float, float], target: tuple[float, float, float]) -> tuple[float, float, float, float]:
+    """计算从 eye 看向 target 的相机四元数（opengl convention）。"""
+    rotation = math_utils.create_rotation_matrix_from_view(
+        torch.tensor([eye], dtype=torch.float32),
+        torch.tensor([target], dtype=torch.float32),
+        up_axis="Z",
+    )
+    quat = math_utils.quat_from_matrix(rotation).squeeze(0)
+    return tuple(float(value) for value in quat.tolist())
+
+
+def placement_box_part_cfg(
+    prim_path: str,
+    *,
+    pos: tuple[float, float, float],
+    size: tuple[float, float, float],
+    color: tuple[float, float, float],
+    collision_enabled: bool,
+) -> AssetBaseCfg:
+    """创建桌面放置框的一个静态部件。"""
+    return AssetBaseCfg(
+        prim_path=prim_path,
+        init_state=AssetBaseCfg.InitialStateCfg(pos=pos, rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=sim_utils.CuboidCfg(
+            size=size,
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=collision_enabled),
+            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.7),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color, roughness=0.65),
+        ),
+    )
+
 
 @configclass
 class LwhSO101TableSceneCfg(InteractiveSceneCfg):
-    """SO101、桌面、可抓取物体、地面、灯光和相机的场景配置。"""
+    """SO101、桌面、可抓取棍子、放置框、地面、灯光和相机的场景配置。"""
 
     robot: ArticulationCfg = SO101_FOLLOWER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -85,15 +147,15 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
     )
 
     overview: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/OverviewCamera",
+        prim_path="{ENV_REGEX_NS}/overview_camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.05, -1.05, 0.60),
-            rot=(0.460084, -0.865388, 0.175324, -0.093211),
-            convention="ros",
+            pos=overview_eye,
+            rot=look_at_quat(overview_eye, overview_target),
+            convention="opengl",
         ),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=20.0,
+            focal_length=24.0,
             focus_distance=400.0,
             horizontal_aperture=38.11,
             clipping_range=(0.01, 50.0),
@@ -123,12 +185,13 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    cube: RigidObjectCfg = RigidObjectCfg(
+    # scene key 沿用 banana，兼容已有录制/回放脚本。
+    banana: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Banana",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.35, -0.34, 0.062), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=object_init_pos, rot=object_init_rot),
         spawn=sim_utils.CapsuleCfg(
-            radius=0.018,
-            height=0.10,
+            radius=object_radius,
+            height=object_length,
             axis="Y",
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
@@ -138,11 +201,80 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
                 max_depenetration_velocity=3.0,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.035),
+            mass_props=sim_utils.MassPropertiesCfg(mass=object_mass),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
             physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=0.8),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.95, 0.78, 0.12), roughness=0.65),
         ),
+    )
+
+    # 放置框是低矮静态托盘，作为任务目标区域；不进入训练观测的 state/action。
+    placement_box_pad = placement_box_part_cfg(
+        "{ENV_REGEX_NS}/PlacementBoxPad",
+        pos=(
+            placement_box_center[0],
+            placement_box_center[1],
+            table_top_z + placement_box_pad_thickness * 0.5,
+        ),
+        size=(
+            placement_box_inner_size[0],
+            placement_box_inner_size[1],
+            placement_box_pad_thickness,
+        ),
+        color=(0.10, 0.36, 0.62),
+        collision_enabled=False,
+    )
+    placement_box_left_wall = placement_box_part_cfg(
+        "{ENV_REGEX_NS}/PlacementBoxLeftWall",
+        pos=(
+            placement_box_center[0] - placement_box_inner_size[0] * 0.5 - placement_box_wall_thickness * 0.5,
+            placement_box_center[1],
+            table_top_z + placement_box_wall_height * 0.5,
+        ),
+        size=(
+            placement_box_wall_thickness,
+            placement_box_inner_size[1] + 2.0 * placement_box_wall_thickness,
+            placement_box_wall_height,
+        ),
+        color=(0.07, 0.24, 0.42),
+        collision_enabled=True,
+    )
+    placement_box_right_wall = placement_box_part_cfg(
+        "{ENV_REGEX_NS}/PlacementBoxRightWall",
+        pos=(
+            placement_box_center[0] + placement_box_inner_size[0] * 0.5 + placement_box_wall_thickness * 0.5,
+            placement_box_center[1],
+            table_top_z + placement_box_wall_height * 0.5,
+        ),
+        size=(
+            placement_box_wall_thickness,
+            placement_box_inner_size[1] + 2.0 * placement_box_wall_thickness,
+            placement_box_wall_height,
+        ),
+        color=(0.07, 0.24, 0.42),
+        collision_enabled=True,
+    )
+    placement_box_front_wall = placement_box_part_cfg(
+        "{ENV_REGEX_NS}/PlacementBoxFrontWall",
+        pos=(
+            placement_box_center[0],
+            placement_box_center[1] - placement_box_inner_size[1] * 0.5 - placement_box_wall_thickness * 0.5,
+            table_top_z + placement_box_wall_height * 0.5,
+        ),
+        size=(placement_box_inner_size[0], placement_box_wall_thickness, placement_box_wall_height),
+        color=(0.07, 0.24, 0.42),
+        collision_enabled=True,
+    )
+    placement_box_back_wall = placement_box_part_cfg(
+        "{ENV_REGEX_NS}/PlacementBoxBackWall",
+        pos=(
+            placement_box_center[0],
+            placement_box_center[1] + placement_box_inner_size[1] * 0.5 + placement_box_wall_thickness * 0.5,
+            table_top_z + placement_box_wall_height * 0.5,
+        ),
+        size=(placement_box_inner_size[0], placement_box_wall_thickness, placement_box_wall_height),
+        color=(0.07, 0.24, 0.42),
+        collision_enabled=True,
     )
 
     light = AssetBaseCfg(
@@ -161,17 +293,17 @@ class LwhSO101ActionsCfg:
 
 @configclass
 class LwhSO101EventCfg:
-    """默认 reset 行为：先恢复场景，再轻微随机化可抓取物体位置。"""
+    """默认 reset 行为：恢复场景并随机化可抓取物体位置。"""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
     randomize_object_xy = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            # 只扰动桌面上的 XY 初始位置，幅度保持很小，避免采集任务目标漂得太远。
-            "pose_range": {"x": (-0.025, 0.025), "y": (-0.025, 0.025)},
+            # 只扰动桌面上的 XY 初始位置，幅度保持很小，避免目标漂出可抓区域或撞到放置框。
+            "pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("cube"),
+            "asset_cfg": SceneEntityCfg("banana"),
         },
     )
 
@@ -239,8 +371,8 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
     dynamic_reset_gripper_effort_limit: bool = False
     robot_name: str = "so101_follower"
     default_feature_joint_names: list[str] = MISSING
-    object_xy_randomization_m: float = 0.025
-    task_description: str = "Grasp the yellow banana-like capsule on the table."
+    object_xy_randomization_m: float = 0.03
+    task_description: str = "Move the rod into the placement tray."
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -258,7 +390,7 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
 
         self.scene.ee_frame.visualizer_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
 
-        # 机器人、桌面和方块的位置在同一个任务配置内显式定义，避免依赖外部任务模板。
+        # 机器人、桌面、可抓取物体和放置框的位置在同一个任务配置内显式定义。
         self.scene.robot.init_state.pos = (0.35, -0.64, 0.01)
         self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SO101_JOINT_NAMES]
 

@@ -5,9 +5,9 @@
 - 这是纯 HDF5 数据查看器，不启动 IsaacSim，不执行 env.step，不访问真实 leader/follower。
 - 默认扫描 datasets/hdf5，也支持网页内 Choose HDF5 手动选择本地文件。
 - 支持 file/episode 下拉、三窗口同步图像回放、播放/暂停/逐帧/timeline/速度控制。
-- 页面布局固定为上 40% front+wrist，下 60% overview；旧数据缺 wrist/overview 时显示“未录制”。
-- 读取并显示当前帧 timestamp、episode outcome、action/state 前 16 个值。
-- action/state 时间曲线（分桶降采样、逐维自动缩放、随帧游标）。
+- 页面默认布局为上 40% front+wrist，下 60% overview，并支持拖拽调整相机区和侧栏尺寸。
+- 读取并显示当前帧 timestamp、episode outcome，action/state 前 16 个值以主画面浮层显示。
+- action/state 时间曲线（分桶降采样、逐维自动缩放、随帧游标），支持点击放大查看。
 - 数据质量检查：timestamp 间隔/单调性、相机空白帧、缺失相机，异常 episode 标记。
 - 质量报告 JSON 下载，用于快速筛查采集数据问题。
 - 服务端 LRU 帧缓存，降低拖动 timeline 时的重复编码开销。
@@ -531,6 +531,12 @@ def html_page() -> bytes:
     return INDEX_HTML.encode("utf-8")
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    """允许旧 viewer 退出后立即复用同一端口。"""
+
+    allow_reuse_address = True
+
+
 def socket_inodes_for_port(port: int) -> set[str]:
     """从 /proc/net/tcp* 找到占用指定本地端口的 socket inode。"""
     inodes: set[str] = set()
@@ -586,7 +592,7 @@ def kill_processes_on_port(port: int) -> list[int]:
     for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except (PermissionError, ProcessLookupError):
             pass
 
     deadline = time.monotonic() + 2.0
@@ -598,22 +604,28 @@ def kill_processes_on_port(port: int) -> list[int]:
     for pid in pids:
         try:
             os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (PermissionError, ProcessLookupError):
             pass
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if not pids_for_socket_inodes(socket_inodes_for_port(port)):
+            break
+        time.sleep(0.05)
     return pids
 
 
 def create_server(host: str, port: int, handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
     """固定使用请求端口；若被旧进程占用，则先清理旧进程。"""
     try:
-        return ThreadingHTTPServer((host, port), handler)
+        return ReusableThreadingHTTPServer((host, port), handler)
     except OSError as exc:
         if exc.errno not in (98, 48):
             raise
         killed_pids = kill_processes_on_port(port)
         if killed_pids:
-            print(f"LWH_HDF5_VIEWER_PORT_CLEANED port={port} pids={killed_pids}", flush=True)
-        return ThreadingHTTPServer((host, port), handler)
+            print(f"网页端口清理 port={port} pids={killed_pids}", flush=True)
+        return ReusableThreadingHTTPServer((host, port), handler)
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -670,8 +682,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
             else:
                 content_type = mimetypes.guess_type(path)[0] or "text/plain"
                 self.send_error(HTTPStatus.NOT_FOUND, f"Not found: {path} ({content_type})")
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as exc:
-            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            try:
+                self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -697,10 +714,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
             payload = item.file.read()
             file_info = self.catalog.add_upload(filename, payload)
             self.send_json({"file": file_info, "files": self.catalog.files()})
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as exc:
-            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            try:
+                self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        if "/frame?" in self.path or "/sample?" in self.path:
+            return
         timestamp = time.strftime("%H:%M:%S")
         print(f"[{timestamp}] {self.address_string()} {fmt % args}", flush=True)
 
@@ -716,14 +740,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
         cache_control: str = "no-store",
         extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", cache_control)
-        for header_name, header_value in extra_headers or []:
-            self.send_header(header_name, header_value)
-        self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", cache_control)
+            for header_name, header_value in extra_headers or []:
+                self.send_header(header_name, header_value)
+            self.end_headers()
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -735,16 +762,21 @@ INDEX_HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f6f3;
+      --bg: #f4f4f1;
       --panel: #ffffff;
-      --line: #deded8;
-      --line-strong: #c8c8c0;
+      --panel-soft: #fafaf7;
+      --line: #ddddda;
+      --line-strong: #c7c7c1;
       --text: #171717;
       --muted: #74746d;
       --soft: #ecece7;
       --accent: #111111;
       --ok: #1f7a45;
       --bad: #a33930;
+      --warning: #9a6b12;
+      --side-width: 360px;
+      --viewer-top: 40%;
+      --camera-left: 50%;
     }
 
     * { box-sizing: border-box; }
@@ -773,9 +805,10 @@ INDEX_HTML = r"""<!doctype html>
       grid-template-columns: auto 1fr auto;
       gap: 28px;
       align-items: center;
-      padding: 22px 28px 18px;
+      padding: 18px 24px 16px;
       border-bottom: 1px solid var(--line);
-      background: rgba(246, 246, 243, 0.96);
+      background: rgba(255, 255, 252, 0.94);
+      backdrop-filter: blur(10px);
     }
 
     .brand {
@@ -849,23 +882,23 @@ INDEX_HTML = r"""<!doctype html>
 
     .workspace {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 320px;
+      grid-template-columns: minmax(0, 1fr) 8px var(--side-width);
       gap: 0;
       min-height: 0;
     }
 
     .viewer {
       display: grid;
-      grid-template-rows: 40fr 60fr;
-      gap: 12px;
+      grid-template-rows: var(--viewer-top) 8px minmax(0, 1fr);
+      gap: 0;
       padding: 18px;
       min-height: 0;
     }
 
     .top-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      grid-template-columns: var(--camera-left) 8px minmax(0, 1fr);
+      gap: 0;
       min-height: 0;
     }
 
@@ -881,6 +914,7 @@ INDEX_HTML = r"""<!doctype html>
       overflow: hidden;
       display: grid;
       place-items: center;
+      border-radius: 6px;
     }
 
     .viewport img {
@@ -921,6 +955,23 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
     }
 
+    .viewport-tools {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .mini-dark-button {
+      height: 26px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background: rgba(18, 18, 18, 0.72);
+      color: #fff;
+      border-radius: 4px;
+      font-size: 12px;
+      padding: 0 9px;
+    }
+
     .empty {
       color: rgba(255, 255, 255, 0.64);
       font-size: 15px;
@@ -928,14 +979,120 @@ INDEX_HTML = r"""<!doctype html>
       padding: 24px;
     }
 
+    .resizer {
+      position: relative;
+      z-index: 6;
+      touch-action: none;
+    }
+
+    .side-resizer,
+    .column-resizer {
+      cursor: col-resize;
+    }
+
+    .row-resizer {
+      cursor: row-resize;
+    }
+
+    .side-resizer::before,
+    .column-resizer::before {
+      content: "";
+      position: absolute;
+      top: 18px;
+      bottom: 18px;
+      left: 3px;
+      width: 2px;
+      border-radius: 99px;
+      background: var(--line-strong);
+      opacity: 0.65;
+    }
+
+    .row-resizer::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      top: 3px;
+      height: 2px;
+      border-radius: 99px;
+      background: var(--line-strong);
+      opacity: 0.65;
+    }
+
+    body.resizing {
+      user-select: none;
+      cursor: grabbing;
+    }
+
+    .vector-overlay {
+      position: absolute;
+      top: 42px;
+      left: 10px;
+      width: min(390px, calc(100% - 20px));
+      max-height: calc(100% - 54px);
+      overflow: auto;
+      z-index: 3;
+      color: #f7f7f0;
+      background: rgba(12, 12, 12, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(10px);
+    }
+
+    .vector-overlay.hidden {
+      display: none;
+    }
+
+    .vector-overlay-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 9px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 12px;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.76);
+    }
+
+    .vector-overlay-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    .vector-overlay-block {
+      min-width: 0;
+      padding: 9px;
+    }
+
+    .vector-overlay-block + .vector-overlay-block {
+      border-left: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .vector-overlay-block h2 {
+      margin: 0 0 7px;
+      font-size: 11px;
+      font-weight: 560;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.68);
+    }
+
+    .vector-overlay pre {
+      color: #f7f7f0;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .side {
       border-left: 1px solid var(--line);
       padding: 18px;
       display: grid;
-      grid-template-rows: auto auto auto auto 1fr;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
       gap: 18px;
       min-height: 0;
-      background: rgba(255, 255, 255, 0.34);
+      background: rgba(255, 255, 255, 0.55);
     }
 
     .charts {
@@ -948,8 +1105,16 @@ INDEX_HTML = r"""<!doctype html>
       padding-top: 10px;
     }
 
+    .chart-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
     .chart-block h2 {
-      margin: 0 0 6px;
+      margin: 0;
       font-size: 12px;
       text-transform: uppercase;
       color: var(--muted);
@@ -958,11 +1123,25 @@ INDEX_HTML = r"""<!doctype html>
 
     .chart-block canvas {
       width: 100%;
-      height: 110px;
+      height: 124px;
       display: block;
       background: #fbfbf9;
       border: 1px solid var(--line);
       border-radius: 4px;
+      cursor: zoom-in;
+    }
+
+    .mini-button {
+      height: 24px;
+      padding: 0 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      background: var(--panel-soft);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+      flex: 0 0 auto;
     }
 
     .quality {
@@ -1015,13 +1194,22 @@ INDEX_HTML = r"""<!doctype html>
       gap: 8px;
     }
 
+    .quality-actions {
+      grid-template-columns: 1fr 1fr;
+    }
+
     button {
       height: 36px;
+      padding: 0 12px;
       border: 1px solid var(--line-strong);
       border-radius: 4px;
       background: var(--panel);
       color: var(--text);
       cursor: pointer;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     button.primary {
@@ -1078,24 +1266,66 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     .vectors {
-      min-height: 0;
-      overflow: auto;
+      display: none;
+    }
+
+    .chart-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: rgba(16, 16, 16, 0.64);
       display: grid;
-      gap: 14px;
-      align-content: start;
+      place-items: center;
+      padding: 24px;
     }
 
-    .vector-block {
-      border-top: 1px solid var(--line);
-      padding-top: 12px;
+    .chart-modal.hidden {
+      display: none;
     }
 
-    .vector-block h2 {
-      margin: 0 0 8px;
-      font-size: 12px;
-      text-transform: uppercase;
+    .chart-modal-panel {
+      width: min(1100px, 100%);
+      height: min(82vh, 760px);
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+    }
+
+    .chart-modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .chart-modal-head strong {
+      font-size: 14px;
+      display: block;
+    }
+
+    .chart-modal-head span {
       color: var(--muted);
-      font-weight: 540;
+      font-size: 12px;
+    }
+
+    .chart-modal-canvas-wrap {
+      min-height: 0;
+      padding: 14px;
+    }
+
+    .chart-modal-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #fcfcfa;
+      border: 1px solid var(--line);
+      border-radius: 4px;
     }
 
     pre {
@@ -1120,6 +1350,10 @@ INDEX_HTML = r"""<!doctype html>
         grid-template-columns: 1fr;
       }
 
+      .side-resizer {
+        display: none;
+      }
+
       .side {
         border-left: 0;
         border-top: 1px solid var(--line);
@@ -1129,14 +1363,38 @@ INDEX_HTML = r"""<!doctype html>
     @media (max-width: 720px) {
       .viewer {
         grid-template-rows: auto auto;
+        gap: 12px;
       }
 
       .top-row {
         grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .column-resizer,
+      .row-resizer {
+        display: none;
       }
 
       .viewport {
         aspect-ratio: 4 / 3;
+      }
+
+      .vector-overlay {
+        position: absolute;
+        top: 42px;
+        left: 8px;
+        right: 8px;
+        width: auto;
+      }
+
+      .vector-overlay-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .vector-overlay-block + .vector-overlay-block {
+        border-left: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
       }
     }
   </style>
@@ -1169,8 +1427,8 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </header>
 
-    <main class="workspace">
-      <section class="viewer">
+    <main class="workspace" id="workspace">
+      <section class="viewer" id="viewer">
         <div class="top-row">
           <article class="viewport" data-slot="front">
             <div class="viewport-header">
@@ -1180,6 +1438,7 @@ INDEX_HTML = r"""<!doctype html>
             <img id="imgFront" alt="front camera" />
             <div class="empty" id="emptyFront">front 未录制</div>
           </article>
+          <div class="resizer column-resizer" data-resize="camera-split" aria-label="Adjust camera split"></div>
           <article class="viewport" data-slot="wrist">
             <div class="viewport-header">
               <span>wrist</span>
@@ -1189,17 +1448,38 @@ INDEX_HTML = r"""<!doctype html>
             <div class="empty" id="emptyWrist">wrist 未录制</div>
           </article>
         </div>
+        <div class="resizer row-resizer" data-resize="viewer-split" aria-label="Adjust viewer split"></div>
         <div class="bottom-row">
           <article class="viewport" data-slot="overview">
             <div class="viewport-header">
               <span>overview</span>
-              <select class="camera-select" id="slotOverview"></select>
+              <div class="viewport-tools">
+                <button class="mini-dark-button" id="toggleVectorButton" type="button">Values</button>
+                <select class="camera-select" id="slotOverview"></select>
+              </div>
             </div>
             <img id="imgOverview" alt="overview camera" />
             <div class="empty" id="emptyOverview">overview 未录制</div>
+            <div class="vector-overlay" id="vectorOverlay">
+              <div class="vector-overlay-head">
+                <span>Action / State</span>
+                <button class="mini-dark-button" id="hideVectorButton" type="button">Hide</button>
+              </div>
+              <div class="vector-overlay-grid">
+                <div class="vector-overlay-block">
+                  <h2>Action</h2>
+                  <pre id="actionValue">[]</pre>
+                </div>
+                <div class="vector-overlay-block">
+                  <h2>State</h2>
+                  <pre id="stateValue">[]</pre>
+                </div>
+              </div>
+            </div>
           </article>
         </div>
       </section>
+      <div class="resizer side-resizer" data-resize="side-panel" aria-label="Adjust side panel width"></div>
 
       <aside class="side">
         <section class="controls">
@@ -1232,39 +1512,45 @@ INDEX_HTML = r"""<!doctype html>
 
         <section class="charts">
           <div class="chart-block">
-            <h2>Action curves</h2>
-            <canvas id="actionChart"></canvas>
+            <div class="chart-head">
+              <h2>Action curves</h2>
+              <button class="mini-button" type="button" data-chart-open="action">放大</button>
+            </div>
+            <canvas id="actionChart" title="点击放大"></canvas>
           </div>
           <div class="chart-block">
-            <h2>State curves</h2>
-            <canvas id="stateChart"></canvas>
+            <div class="chart-head">
+              <h2>State curves</h2>
+              <button class="mini-button" type="button" data-chart-open="state">放大</button>
+            </div>
+            <canvas id="stateChart" title="点击放大"></canvas>
           </div>
         </section>
 
         <section class="quality">
-          <div class="button-row">
-            <button id="qualityButton" type="button">Quality Report</button>
-            <button id="qualityDownload" type="button" disabled>Download JSON</button>
+          <div class="button-row quality-actions">
+            <button id="qualityButton" type="button">质量报告</button>
+            <button id="qualityDownload" type="button" disabled>下载 JSON</button>
           </div>
           <div class="quality-list" id="qualityList"></div>
         </section>
-
-        <section class="vectors">
-          <div class="vector-block">
-            <h2>Action</h2>
-            <pre id="actionValue">[]</pre>
-          </div>
-          <div class="vector-block">
-            <h2>State</h2>
-            <pre id="stateValue">[]</pre>
-          </div>
-          <div class="vector-block">
-            <h2>Dataset</h2>
-            <pre id="datasetValue">No file selected.</pre>
-          </div>
-        </section>
       </aside>
     </main>
+  </div>
+
+  <div class="chart-modal hidden" id="chartModal" aria-hidden="true">
+    <div class="chart-modal-panel" role="dialog" aria-modal="true" aria-labelledby="chartModalTitle">
+      <div class="chart-modal-head">
+        <div>
+          <strong id="chartModalTitle">Chart</strong>
+          <span id="chartModalHint">点击图表空白处或按 Esc 关闭</span>
+        </div>
+        <button id="chartModalClose" type="button">Close</button>
+      </div>
+      <div class="chart-modal-canvas-wrap">
+        <canvas class="chart-modal-canvas" id="chartModalCanvas"></canvas>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -1280,9 +1566,25 @@ INDEX_HTML = r"""<!doctype html>
       cameras: [],
       series: null,
       quality: null,
+      showVectors: true,
+      chartModal: null,
+      imageLoading: {
+        front: false,
+        wrist: false,
+        overview: false,
+      },
+      sampleLoading: false,
+      sampleRequestId: 0,
+      layout: {
+        sideWidth: 360,
+        viewerTop: 40,
+        cameraLeft: 50,
+      },
     };
 
     const els = {
+      workspace: document.getElementById("workspace"),
+      viewer: document.getElementById("viewer"),
       fileSelect: document.getElementById("fileSelect"),
       episodeSelect: document.getElementById("episodeSelect"),
       uploadButton: document.getElementById("uploadButton"),
@@ -1300,7 +1602,6 @@ INDEX_HTML = r"""<!doctype html>
       outcomeValue: document.getElementById("outcomeValue"),
       actionValue: document.getElementById("actionValue"),
       stateValue: document.getElementById("stateValue"),
-      datasetValue: document.getElementById("datasetValue"),
       slotFront: document.getElementById("slotFront"),
       slotWrist: document.getElementById("slotWrist"),
       slotOverview: document.getElementById("slotOverview"),
@@ -1315,6 +1616,16 @@ INDEX_HTML = r"""<!doctype html>
       qualityButton: document.getElementById("qualityButton"),
       qualityDownload: document.getElementById("qualityDownload"),
       qualityList: document.getElementById("qualityList"),
+      vectorOverlay: document.getElementById("vectorOverlay"),
+      toggleVectorButton: document.getElementById("toggleVectorButton"),
+      hideVectorButton: document.getElementById("hideVectorButton"),
+      chartModal: document.getElementById("chartModal"),
+      chartModalCanvas: document.getElementById("chartModalCanvas"),
+      chartModalTitle: document.getElementById("chartModalTitle"),
+      chartModalHint: document.getElementById("chartModalHint"),
+      chartModalClose: document.getElementById("chartModalClose"),
+      chartOpenButtons: Array.from(document.querySelectorAll("[data-chart-open]")),
+      resizeHandles: Array.from(document.querySelectorAll("[data-resize]")),
     };
 
     const CHART_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#00a2a2", "#b2793d"];
@@ -1361,6 +1672,10 @@ INDEX_HTML = r"""<!doctype html>
       return values.map((value, index) => `${String(index).padStart(2, "0")}: ${value.toFixed(5)}`).join("\n");
     }
 
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
     function fillSelect(select, options, selected) {
       select.innerHTML = "";
       for (const option of options) {
@@ -1377,6 +1692,34 @@ INDEX_HTML = r"""<!doctype html>
       return values.map((value) => ({ value, label: value }));
     }
 
+    function syncLayoutVariables() {
+      document.documentElement.style.setProperty("--side-width", `${state.layout.sideWidth}px`);
+      document.documentElement.style.setProperty("--viewer-top", `${state.layout.viewerTop}%`);
+      document.documentElement.style.setProperty("--camera-left", `${state.layout.cameraLeft}%`);
+    }
+
+    function setVectorOverlayVisible(visible) {
+      state.showVectors = visible;
+      els.vectorOverlay.classList.toggle("hidden", !visible);
+      els.toggleVectorButton.textContent = visible ? "Hide" : "Values";
+    }
+
+    function openChartModal(kind) {
+      state.chartModal = kind;
+      const title = kind === "action" ? "Action curves" : "State curves";
+      els.chartModalTitle.textContent = title;
+      els.chartModalHint.textContent = "点击空白处或按 Esc 关闭";
+      els.chartModal.classList.remove("hidden");
+      els.chartModal.setAttribute("aria-hidden", "false");
+      drawChartModal();
+    }
+
+    function closeChartModal() {
+      state.chartModal = null;
+      els.chartModal.classList.add("hidden");
+      els.chartModal.setAttribute("aria-hidden", "true");
+    }
+
     function configureCameraSlots() {
       const options = cameraOptions();
       fillSelect(els.slotFront, options, state.cameras.includes("front") ? "front" : options[0]?.value);
@@ -1385,24 +1728,35 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function imageUrl(camera) {
-      const cacheKey = Date.now();
-      return `/api/files/${state.fileId}/episodes/${state.episodeId}/frame?camera=${encodeURIComponent(camera)}&frame=${state.frame}&_=${cacheKey}`;
+      return `/api/files/${state.fileId}/episodes/${state.episodeId}/frame?camera=${encodeURIComponent(camera)}&frame=${state.frame}`;
     }
 
-    function updateImage(img, empty, camera) {
+    function updateImage(img, empty, camera, slotName) {
       if (!state.cameras.includes(camera)) {
         img.removeAttribute("src");
         img.style.display = "none";
         empty.style.display = "block";
         empty.textContent = `${camera} 未录制`;
+        state.imageLoading[slotName] = false;
+        return;
+      }
+      if (state.playing && state.imageLoading[slotName]) {
         return;
       }
       empty.style.display = "none";
       img.style.display = "block";
+      state.imageLoading[slotName] = true;
+      img.onload = () => {
+        state.imageLoading[slotName] = false;
+      };
+      img.onerror = () => {
+        state.imageLoading[slotName] = false;
+      };
       img.src = imageUrl(camera);
     }
 
-    function drawSeriesChart(canvas, series, labels, cursorIndex) {
+    function drawSeriesChart(canvas, series, labels, cursorIndex, options = {}) {
+      const large = Boolean(options.large);
       const ctx = canvas.getContext("2d");
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth || 280;
@@ -1413,19 +1767,22 @@ INDEX_HTML = r"""<!doctype html>
       ctx.clearRect(0, 0, cssW, cssH);
       if (!series) {
         ctx.fillStyle = "#999";
-        ctx.font = "12px sans-serif";
-        ctx.fillText("missing", 8, 20);
+        ctx.font = large ? "13px sans-serif" : "12px sans-serif";
+        ctx.fillText("missing", 8, large ? 28 : 20);
         return;
       }
       const count = series.indices.length;
       if (count < 1) return;
       const tMin = series.indices[0];
       const tMax = series.indices[count - 1] || 1;
-      const padL = 8, padR = 8, padT = 6, padB = 18;
+      const padL = large ? 12 : 8;
+      const padR = large ? 12 : 8;
+      const padT = large ? 10 : 6;
+      const padB = large ? 28 : 18;
       const plotW = cssW - padL - padR;
       const plotH = cssH - padT - padB;
       const xOf = (t) => padL + ((t - tMin) / Math.max(tMax - tMin, 1)) * plotW;
-      ctx.font = "9px sans-serif";
+      ctx.font = large ? "10px sans-serif" : "9px sans-serif";
       series.mins.forEach((mins, dim) => {
         const all = mins.concat(series.maxs[dim]);
         let vMin = Math.min(...all);
@@ -1436,25 +1793,83 @@ INDEX_HTML = r"""<!doctype html>
         ctx.fillStyle = color;
         ctx.globalAlpha = 0.14;
         ctx.beginPath();
-        for (let i = 0; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf(mins[i]));
+        ctx.moveTo(xOf(series.indices[0]), yOf(mins[0]));
+        for (let i = 1; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf(mins[i]));
         for (let i = count - 1; i >= 0; i--) ctx.lineTo(xOf(series.indices[i]), yOf(series.maxs[dim][i]));
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
         ctx.strokeStyle = color;
+        ctx.lineWidth = large ? 1.4 : 1;
         ctx.beginPath();
-        for (let i = 0; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf((mins[i] + series.maxs[dim][i]) / 2));
+        ctx.moveTo(xOf(series.indices[0]), yOf((mins[0] + series.maxs[dim][0]) / 2));
+        for (let i = 1; i < count; i++) ctx.lineTo(xOf(series.indices[i]), yOf((mins[i] + series.maxs[dim][i]) / 2));
         ctx.stroke();
+        if (options.legend === "bottom-right") return; // 图例统一画在右下角
         const label = labels && labels[dim] !== undefined ? labels[dim] : `d${dim}`;
         ctx.fillStyle = color;
-        ctx.fillText(String(label), padL + dim * 42, cssH - 4);
+        const labelX = padL + dim * (large ? 58 : 42);
+        if (labelX < cssW - 20) {
+          ctx.fillText(String(label), labelX, cssH - (large ? 8 : 4));
+        }
       });
       if (cursorIndex !== null && cursorIndex !== undefined && tMax >= tMin) {
         ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(xOf(cursorIndex), padT);
         ctx.lineTo(xOf(cursorIndex), padT + plotH);
         ctx.stroke();
+      }
+      if (options.legend === "bottom-right") {
+        drawLegendBottomRight(ctx, series, labels, cssW, cssH, large);
+      }
+    }
+
+    // 右下角图例：色块 + 名称，多列排列，类似 Excel 图例。
+    function drawLegendBottomRight(ctx, series, labels, cssW, cssH, large) {
+      const dims = series.mins.length;
+      if (dims === 0) return;
+      const fontPx = large ? 10 : 9;
+      ctx.font = `${fontPx}px sans-serif`;
+      const lineH = large ? 15 : 13;
+      const swatchW = large ? 16 : 12;
+      const swatchH = large ? 4 : 3;
+      const gap = large ? 6 : 4;
+      const padX = large ? 8 : 6;
+      const padY = large ? 6 : 5;
+      const rows = large ? 6 : 4;
+      const cols = Math.ceil(dims / rows);
+      const colW = Array(cols).fill(0);
+      for (let dim = 0; dim < dims; dim++) {
+        const label = labels && labels[dim] !== undefined ? labels[dim] : `d${dim}`;
+        const width = ctx.measureText(String(label)).width;
+        colW[Math.floor(dim / rows)] = Math.max(colW[Math.floor(dim / rows)], width);
+      }
+      const boxW = padX * 2 + cols * (swatchW + gap) + colW.reduce((sum, w) => sum + w, 0);
+      const boxH = padY * 2 + Math.min(dims, rows) * lineH;
+      const x0 = cssW - boxW - 4;
+      const y0 = cssH - boxH - 4;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+      ctx.strokeStyle = "#ddddda";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(x0, y0, boxW, boxH);
+      ctx.fill();
+      ctx.stroke();
+      let colX = x0 + padX;
+      for (let col = 0; col < cols; col++) {
+        for (let row = 0; row < rows; row++) {
+          const dim = col * rows + row;
+          if (dim >= dims) continue;
+          const label = labels && labels[dim] !== undefined ? labels[dim] : `d${dim}`;
+          const y = y0 + padY + row * lineH + lineH / 2;
+          ctx.fillStyle = CHART_COLORS[dim % CHART_COLORS.length];
+          ctx.fillRect(colX, y - swatchH / 2, swatchW, swatchH);
+          ctx.fillStyle = "#333";
+          ctx.fillText(String(label), colX + swatchW + gap, y + fontPx / 3);
+        }
+        colX += colW[col] + swatchW + gap;
       }
     }
 
@@ -1463,11 +1878,32 @@ INDEX_HTML = r"""<!doctype html>
       return series.mins.map((_, dim) => names && names[dim] ? names[dim].replace(/\.pos$/, "") : `${prefix}${dim}`);
     }
 
-    function drawCharts() {
-      const series = state.series;
+    function chartDescriptor(kind) {
+      const series = state.series ? state.series[kind] : null;
       const stateNames = state.summary && state.summary.joint_names ? state.summary.joint_names : [];
-      drawSeriesChart(els.actionChart, series ? series.action : null, chartLabels(series ? series.action : null, [], "a"), state.frame);
-      drawSeriesChart(els.stateChart, series ? series.state : null, chartLabels(series ? series.state : null, stateNames, "s"), state.frame);
+      if (kind === "action") {
+        // 维数一致时复用 joint_names，图例可直接看出哪条曲线对应哪个关节。
+        const actionNames = series && series.mins.length === stateNames.length ? stateNames : [];
+        return { title: "Action curves", series, labels: chartLabels(series, actionNames, "a") };
+      }
+      return { title: "State curves", series, labels: chartLabels(series, stateNames, "s") };
+    }
+
+    function drawCharts() {
+      const action = chartDescriptor("action");
+      const stateSeries = chartDescriptor("state");
+      drawSeriesChart(els.actionChart, action.series, action.labels, state.frame, { legend: "bottom-right" });
+      drawSeriesChart(els.stateChart, stateSeries.series, stateSeries.labels, state.frame);
+      drawChartModal();
+    }
+
+    function drawChartModal() {
+      if (!state.chartModal || els.chartModal.classList.contains("hidden")) return;
+      const descriptor = chartDescriptor(state.chartModal);
+      drawSeriesChart(els.chartModalCanvas, descriptor.series, descriptor.labels, state.frame, {
+        large: true,
+        legend: state.chartModal === "action" ? "bottom-right" : null,
+      });
     }
 
     async function loadSeries() {
@@ -1490,19 +1926,29 @@ INDEX_HTML = r"""<!doctype html>
       els.frameSlider.max = String(maxFrame);
       els.frameSlider.value = String(state.frame);
 
-      updateImage(els.imgFront, els.emptyFront, els.slotFront.value);
-      updateImage(els.imgWrist, els.emptyWrist, els.slotWrist.value);
-      updateImage(els.imgOverview, els.emptyOverview, els.slotOverview.value);
+      updateImage(els.imgFront, els.emptyFront, els.slotFront.value, "front");
+      updateImage(els.imgWrist, els.emptyWrist, els.slotWrist.value, "wrist");
+      updateImage(els.imgOverview, els.emptyOverview, els.slotOverview.value, "overview");
       drawCharts();
 
+      if (state.playing && state.sampleLoading) {
+        return;
+      }
+      const requestId = ++state.sampleRequestId;
+      state.sampleLoading = true;
       try {
         const sample = await api(`/api/files/${state.fileId}/episodes/${state.episodeId}/sample?frame=${state.frame}`);
+        if (requestId !== state.sampleRequestId) return;
         els.frameValue.textContent = `${sample.frame_index + 1} / ${sample.num_samples}`;
         els.timeValue.textContent = `${sample.timestamp.toFixed(3)} s`;
         els.actionValue.textContent = formatVector(sample.action);
         els.stateValue.textContent = formatVector(sample.state);
       } catch (error) {
         setStatus(error.message, "bad");
+      } finally {
+        if (requestId === state.sampleRequestId) {
+          state.sampleLoading = false;
+        }
       }
     }
 
@@ -1516,13 +1962,19 @@ INDEX_HTML = r"""<!doctype html>
     function startPlayback() {
       const episode = currentEpisode();
       if (!episode || episode.num_samples <= 0) return;
+      const maxFrame = Math.max(episode.num_samples - 1, 0);
+      // 停在最后一帧时按播放则从头重播；播放到最后一帧后自动暂停。
+      if (state.frame >= maxFrame) state.frame = 0;
       state.playing = true;
       els.playButton.textContent = "Pause";
       const speed = Number(els.speedSelect.value);
-      const intervalMs = Math.max(8, 1000 / Math.max(state.fps * speed, 1));
+      const intervalMs = Math.max(33, 1000 / Math.max(state.fps * speed, 1));
       state.timer = setInterval(() => {
-        const maxFrame = Math.max(episode.num_samples - 1, 0);
-        state.frame = state.frame >= maxFrame ? 0 : state.frame + 1;
+        if (state.frame >= maxFrame) {
+          stopPlayback();
+          return;
+        }
+        state.frame += 1;
         renderFrame();
       }, intervalMs);
     }
@@ -1550,6 +2002,9 @@ INDEX_HTML = r"""<!doctype html>
       state.fps = state.summary.fps || 30;
       state.quality = null;
       state.series = null;
+      state.imageLoading = { front: false, wrist: false, overview: false };
+      state.sampleLoading = false;
+      state.sampleRequestId += 1;
       els.qualityList.innerHTML = "";
       els.qualityDownload.disabled = true;
       const episodes = state.summary.episodes || [];
@@ -1566,15 +2021,6 @@ INDEX_HTML = r"""<!doctype html>
       configureCameraSlots();
       state.frame = 0;
       els.fpsValue.textContent = String(state.fps);
-      els.datasetValue.textContent = JSON.stringify({
-        file: state.summary.name,
-        task: state.summary.task,
-        teleop_device: state.summary.teleop_device,
-        cameras: state.cameras,
-        training_cameras: state.summary.training_camera_keys || [],
-        visualization_cameras: state.summary.visualization_camera_keys || [],
-        joint_names: state.summary.joint_names,
-      }, null, 2);
       updateEpisodeReadout();
       setStatus("Ready", "ok");
       await loadSeries();
@@ -1681,6 +2127,54 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
+    function setupResizablePanels() {
+      let active = null;
+
+      function beginResize(event, kind) {
+        if (window.innerWidth <= 980) return;
+        event.preventDefault();
+        const workspaceRect = els.workspace.getBoundingClientRect();
+        const viewerRect = els.viewer.getBoundingClientRect();
+        const topRow = document.querySelector(".top-row");
+        const topRowRect = topRow.getBoundingClientRect();
+        active = {
+          kind,
+          workspaceRect,
+          viewerRect,
+          topRowRect,
+        };
+        document.body.classList.add("resizing");
+        window.addEventListener("pointermove", onResizeMove);
+        window.addEventListener("pointerup", endResize, { once: true });
+      }
+
+      function onResizeMove(event) {
+        if (!active) return;
+        if (active.kind === "side-panel") {
+          const width = clamp(active.workspaceRect.right - event.clientX - 8, 260, 640);
+          state.layout.sideWidth = width;
+        } else if (active.kind === "viewer-split") {
+          const percent = ((event.clientY - active.viewerRect.top) / active.viewerRect.height) * 100;
+          state.layout.viewerTop = clamp(percent, 24, 68);
+        } else if (active.kind === "camera-split") {
+          const percent = ((event.clientX - active.topRowRect.left) / active.topRowRect.width) * 100;
+          state.layout.cameraLeft = clamp(percent, 24, 76);
+        }
+        syncLayoutVariables();
+        drawCharts();
+      }
+
+      function endResize() {
+        active = null;
+        document.body.classList.remove("resizing");
+        window.removeEventListener("pointermove", onResizeMove);
+      }
+
+      els.resizeHandles.forEach((handle) => {
+        handle.addEventListener("pointerdown", (event) => beginResize(event, handle.dataset.resize));
+      });
+    }
+
     els.fileSelect.addEventListener("change", () => loadSummary(els.fileSelect.value).catch((error) => setStatus(error.message, "bad")));
     els.uploadButton.addEventListener("click", () => els.uploadInput.click());
     els.uploadInput.addEventListener("change", () => {
@@ -1696,13 +2190,31 @@ INDEX_HTML = r"""<!doctype html>
       state.cameras = episode?.camera_keys || state.summary?.camera_keys || [];
       configureCameraSlots();
       state.frame = 0;
+      state.imageLoading = { front: false, wrist: false, overview: false };
+      state.sampleLoading = false;
+      state.sampleRequestId += 1;
       updateEpisodeReadout();
       await loadSeries();
       renderFrame();
     });
     els.qualityButton.addEventListener("click", () => loadQuality());
     els.qualityDownload.addEventListener("click", () => downloadQuality());
+    els.toggleVectorButton.addEventListener("click", () => setVectorOverlayVisible(!state.showVectors));
+    els.hideVectorButton.addEventListener("click", () => setVectorOverlayVisible(false));
+    els.actionChart.addEventListener("click", () => openChartModal("action"));
+    els.stateChart.addEventListener("click", () => openChartModal("state"));
+    els.chartOpenButtons.forEach((button) => {
+      button.addEventListener("click", () => openChartModal(button.dataset.chartOpen));
+    });
+    els.chartModalClose.addEventListener("click", closeChartModal);
+    els.chartModal.addEventListener("click", (event) => {
+      if (event.target === els.chartModal) closeChartModal();
+    });
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.chartModal) {
+        closeChartModal();
+        return;
+      }
       const tag = (document.activeElement && document.activeElement.tagName) || "";
       if (tag === "INPUT" || tag === "SELECT" || tag === "BUTTON") return;
       if (event.code === "Space") {
@@ -1745,6 +2257,9 @@ INDEX_HTML = r"""<!doctype html>
       select.addEventListener("change", renderFrame);
     });
 
+    syncLayoutVariables();
+    setVectorOverlayVisible(true);
+    setupResizablePanels();
     loadFiles().catch((error) => setStatus(error.message, "bad"));
   </script>
 </body>
@@ -1763,12 +2278,12 @@ def main() -> None:
     server = create_server(args.host, args.port, ViewerHandler)
     actual_host, actual_port = server.server_address
     url = f"http://{actual_host}:{actual_port}"
-    print(f"LWH_HDF5_VIEWER_READY url={url} data_dir={args.data_dir}", flush=True)
+    print(f"网页已启动 url={url}", flush=True)
     print("Press Ctrl+C to stop the viewer.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nLWH_HDF5_VIEWER_STOPPED", flush=True)
+        print("\n网页已停止", flush=True)
     finally:
         server.server_close()
 
