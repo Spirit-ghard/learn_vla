@@ -335,7 +335,7 @@
 
 - 服务端复用 LeRobot `PolicyServer`，使用官方 gRPC service 和 action chunk 推理。
 - IsaacLab 客户端复用官方 queue threshold、timestep 对齐和重叠 chunk 聚合逻辑。
-- 默认 60 Hz physics、30 Hz policy action、`30` actions/chunk、`0.5` queue threshold。
+- 默认 60 Hz physics、30 Hz policy action；远程实测后采用 `60` actions/chunk、`0.65` queue threshold。
 
 原因：
 
@@ -347,6 +347,20 @@
 - 服务端运行在独立 LeRobot 环境，IsaacLab 进程不 import LeRobot，也不控制真实 follower。
 - Isaac 客户端只保留官方 protobuf 的兼容生成代码和仿真环境适配。
 - `overview` 不进入策略请求，训练与推理输入固定为 `state + front + wrist`。
+
+## 2026-08-30：远程客户端管理 SSH 隧道和策略生命周期
+
+决策：
+
+- `run_policy_client.py --ssh_host ...` 直接启动并维护 SSH 本地端口转发。
+- PolicyServer 保持只监听服务器 `127.0.0.1`，不直接开放公网端口。
+- 客户端连接并加载模型后等待 B；R/N 清空两端队列、重置仿真并停止策略。
+- reset 时间之前发出的 action chunk 即使稍后到达，也会按 observation timestamp 丢弃。
+
+原因：
+
+- 正式使用只保留“服务器 PolicyServer + 本机 Isaac Sim”两个终端。
+- 键盘生命周期与 teleop/record 一致，避免启动即执行和 reset 后旧动作进入新场景。
 
 ## 术语说明：Wall loop Hz 和 Control segment Hz
 

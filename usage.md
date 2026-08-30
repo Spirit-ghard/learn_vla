@@ -5,7 +5,7 @@
 终端一登录服务器并启动 Policy Server：
 
 ```bash
-ssh -p 30724 root@183.147.142.40
+ssh -p 31361 root@183.147.142.40
 
 cd /root/gpufree-data/lwh_policy_server
 /root/lerobot/.venv/bin/python serve_lerobot_policy.py \
@@ -16,17 +16,7 @@ cd /root/gpufree-data/lwh_policy_server
 
 看到 `LWH_ASYNC_POLICY_SERVER_READY` 后保持终端运行。
 
-终端二在本机建立 SSH 隧道：
-
-```bash
-ssh -N -p 30724 \
-  -o ServerAliveInterval=15 \
-  -o ServerAliveCountMax=3 \
-  -L 18080:127.0.0.1:8080 \
-  root@183.147.142.40
-```
-
-终端三在本机启动 Isaac Sim：
+终端二在本机启动 Isaac Sim。客户端会自动建立和回收 SSH 隧道，不再需要单独的隧道终端：
 
 ```bash
 conda activate isaac
@@ -34,17 +24,24 @@ cd /home/a/lwh_code/lwh_robot_learning
 
 python3 scripts/run_policy_client.py \
   --task Lwh-SO101-Table-v0 \
-  --server_address 127.0.0.1:18080 \
+  --ssh_host 183.147.142.40 \
+  --ssh_port 31361 \
   --policy_path /root/gpufree-data/lwh_lerobot_data/runs/act_video_b32_50k_20260823_184025/checkpoints/030000/pretrained_model \
-  --policy_device cuda \
-  --actions_per_chunk 60 \
-  --chunk_size_threshold 0.65 \
-  --camera_mode dual \
-  --render_interval 2
+  --policy_device cuda
 ```
 
-`--policy_path` 是服务器上的路径。客户端会先等待首个 action chunk，再开始执行策略。
-运行期间只控制 IsaacLab 仿真机器人，不访问真实 follower。
+按终端提示输入 SSH 密码。出现 `LWH_ASYNC_POLICY_CLIENT_WAITING_FOR_B` 后操作 Isaac Sim
+窗口：
+
+```text
+B：发送当前观测，收到首个 action chunk 后开始执行策略
+R：停止当前策略并重置场景，标记为失败
+N：停止当前策略并重置场景，标记为成功
+Ctrl+C：退出客户端，同时关闭其创建的 SSH 隧道
+```
+
+R/N 后不会自动继续推理，需要再次按 B。`--policy_path` 是服务器上的路径。运行期间只
+控制 IsaacLab 仿真机器人，不访问真实 follower。
 
 ## 本机推理
 
@@ -97,7 +94,8 @@ python3 scripts/run_policy_client.py \
 5. 以 30 Hz 从队列取动作，同时保持 IsaacLab 物理环境持续 step。
 
 策略推理和动作执行相互解耦。PolicyServer 计算下一段动作时，IsaacLab 会继续执行
-本地队列中已有的动作，不会像旧同步实现一样等待每一次模型推理。
+本地队列中已有的动作，不会像旧同步实现一样等待每一次模型推理。客户端完成连接和
+模型加载后停在等待状态，只有按 B 才发送观测并开始执行动作。
 
 ## 服务端参数
 
@@ -117,11 +115,16 @@ python3 scripts/run_policy_client.py \
 | --- | --- | --- |
 | `--task` | `Lwh-SO101-Table-v0` | 要运行的 IsaacLab Gym task id。 |
 | `--server_address` | `127.0.0.1:8080` | PolicyServer 地址，格式必须是 `HOST:PORT`，不能填写 `http://`。 |
+| `--ssh_host` | 未设置 | SSH 服务器 IP；设置后由客户端自动建立隧道，并忽略 `--server_address`。 |
+| `--ssh_port` | `22` | SSH 映射端口；云平台重建实例后通常只需修改这一项。 |
+| `--ssh_user` | `root` | SSH 登录用户。 |
+| `--ssh_local_port` | `18080` | 客户端内部使用的本地转发端口；被占用时可换一个。 |
+| `--ssh_remote_port` | `8080` | 服务器回环地址上的 PolicyServer 端口。 |
 | `--policy_path` | `checkpoints/act_so101_table_030000` | 服务端能够访问的 LeRobot checkpoint 路径。远程运行时必须填写服务器上的路径。 |
 | `--policy_type` | `act` | LeRobot 策略类型，当前 checkpoint 使用 ACT。 |
 | `--policy_device` | `cuda` | PolicyServer 加载模型的设备。使用服务器 GPU 时保持 `cuda`；本机显存不足时改为 `cpu`。 |
-| `--actions_per_chunk` | `30` | 每次推理返回的动作数量。公网部署推荐显式设置为 60，当前 ACT checkpoint 最大支持 100。 |
-| `--chunk_size_threshold` | `0.5` | action queue 的预取阈值。公网部署推荐显式设置为 0.65。 |
+| `--actions_per_chunk` | `60` | 每次推理返回的动作数量，即当前配置下约 2 秒动作。 |
+| `--chunk_size_threshold` | `0.65` | action queue 剩余比例低于该值时预取下一段。 |
 | `--aggregate_fn_name` | `weighted_average` | 融合新旧 action chunk 中相同 timestep 的动作。默认更偏向新动作。 |
 | `--policy_hz` | `30` | 本地 action queue 的消费频率，应与训练数据 FPS 保持一致。 |
 | `--camera_mode` | `dual` | `dual` 使用 front+wrist；`triple` 额外保留 overview 供观察，但 overview 不发送给模型。 |
@@ -149,14 +152,16 @@ render_interval=2
 ## 远程服务器
 
 远程部署时，PolicyServer 放在服务器，IsaacLab 和相机 observation 留在本机。
-推荐使用 SSH 本地端口转发，再让客户端连接 `127.0.0.1:8080`。不要把使用 pickle
-序列化的 gRPC 服务直接暴露到公网。
+客户端通过 SSH 本地端口转发访问服务器回环地址。隧道由 `run_policy_client.py` 自动
+创建和回收，不要把使用 pickle 序列化的 gRPC 服务直接暴露到公网。
 
 远程模式需要修改的主要参数只有：
 
 ```text
 --policy_path      改为服务器上的 checkpoint 绝对路径
 --policy_device    使用服务器 GPU 时设置为 cuda
+--ssh_host         服务器 IP
+--ssh_port         云平台当前映射的 SSH 端口
 ```
 
 无论本机还是远程模式，客户端只发送：

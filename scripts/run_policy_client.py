@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import signal
+import socket
+import subprocess
 import time
 import traceback
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,31 @@ def parse_args() -> argparse.Namespace:
         help="LeRobot async gRPC server as HOST:PORT.",
     )
     parser.add_argument(
+        "--ssh_host",
+        default=None,
+        help="SSH server host. Setting this enables the managed SSH tunnel.",
+    )
+    parser.add_argument("--ssh_port", type=int, default=22, help="SSH server port.")
+    parser.add_argument("--ssh_user", default="root", help="SSH server user.")
+    parser.add_argument(
+        "--ssh_local_port",
+        type=int,
+        default=18080,
+        help="Local port used by the managed SSH tunnel.",
+    )
+    parser.add_argument(
+        "--ssh_remote_port",
+        type=int,
+        default=8080,
+        help="PolicyServer port on the SSH server loopback interface.",
+    )
+    parser.add_argument(
+        "--ssh_connect_timeout_s",
+        type=float,
+        default=60.0,
+        help="Maximum time allowed for SSH authentication and port forwarding.",
+    )
+    parser.add_argument(
         "--policy_path",
         default=str(default_policy_path),
         help="Checkpoint path visible to the policy server, or a Hugging Face repo id.",
@@ -37,13 +66,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--actions_per_chunk",
         type=int,
-        default=30,
-        help="Actions returned per inference request. 30 is one second at 30 Hz.",
+        default=60,
+        help="Actions returned per inference request. 60 is two seconds at 30 Hz.",
     )
     parser.add_argument(
         "--chunk_size_threshold",
         type=float,
-        default=0.5,
+        default=0.65,
         help="Request a fresh chunk when the local queue falls below this ratio.",
     )
     parser.add_argument(
@@ -94,6 +123,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--chunk_size_threshold must be between 0 and 1.")
     if args.render_interval < 1 or args.max_steps < 0:
         parser.error("render_interval must be positive and max_steps cannot be negative.")
+    if not 1 <= args.ssh_port <= 65535 or not 1 <= args.ssh_local_port <= 65535:
+        parser.error("SSH ports must be between 1 and 65535.")
+    if not 1 <= args.ssh_remote_port <= 65535 or args.ssh_connect_timeout_s <= 0:
+        parser.error("SSH remote port and connect timeout must be positive.")
     if "://" in args.server_address:
         parser.error("--server_address uses HOST:PORT, not an HTTP URL.")
     args.enable_cameras = True
@@ -111,6 +144,8 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym  # noqa: E402
 import numpy as np  # noqa: E402
+import carb  # noqa: E402
+import omni.appwindow  # noqa: E402
 import torch  # noqa: E402
 
 import lwh_isaaclab_tasks  # noqa: E402,F401
@@ -146,6 +181,154 @@ class RateLimiter:
             time.sleep(min(remaining, self.period))
         if self.next_step < time.perf_counter() - self.period:
             self.next_step = time.perf_counter()
+
+    def reset(self) -> None:
+        self.next_step = time.perf_counter()
+
+
+class ManagedSshTunnel:
+    """在客户端进程内维护 SSH 本地端口转发。"""
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        user: str,
+        local_port: int,
+        remote_port: int,
+        connect_timeout_s: float,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.user = user
+        self.local_port = local_port
+        self.remote_port = remote_port
+        self.connect_timeout_s = connect_timeout_s
+        self.process: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        if shutil.which("ssh") is None:
+            raise RuntimeError("Cannot find the ssh executable in PATH.")
+        if port_is_open("127.0.0.1", self.local_port):
+            raise RuntimeError(
+                f"Local port {self.local_port} is already in use. "
+                "Stop the old tunnel or choose --ssh_local_port."
+            )
+
+        command = [
+            "ssh",
+            "-N",
+            "-p",
+            str(self.port),
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-L",
+            f"{self.local_port}:127.0.0.1:{self.remote_port}",
+            f"{self.user}@{self.host}",
+        ]
+        print(
+            f"LWH_SSH_TUNNEL_CONNECT destination={self.user}@{self.host}:{self.port} "
+            f"local_port={self.local_port} remote_port={self.remote_port}",
+            flush=True,
+        )
+        # 独立进程组避免 Ctrl+C 越过客户端清理逻辑直接终止隧道。
+        self.process = subprocess.Popen(command, start_new_session=True)
+        deadline = time.perf_counter() + self.connect_timeout_s
+        while time.perf_counter() < deadline:
+            return_code = self.process.poll()
+            if return_code is not None:
+                raise RuntimeError(f"SSH tunnel exited before becoming ready (code {return_code}).")
+            if port_is_open("127.0.0.1", self.local_port):
+                print(f"LWH_SSH_TUNNEL_READY local_port={self.local_port}", flush=True)
+                return
+            time.sleep(0.1)
+        self.stop()
+        raise TimeoutError(
+            f"SSH tunnel did not become ready within {self.connect_timeout_s:.1f}s."
+        )
+
+    def stop(self) -> None:
+        if self.process is None or self.process.poll() is not None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=1.0)
+        print("LWH_SSH_TUNNEL_STOPPED", flush=True)
+
+
+class PolicyKeyboard:
+    """通过 Omniverse/Carb 键盘事件控制策略开始和场景重置。"""
+
+    def __init__(self) -> None:
+        self.start_requested = False
+        self.reset_reason: str | None = None
+        appwindow = omni.appwindow.get_default_app_window()
+        self.input = carb.input.acquire_input_interface()
+        self.keyboard = appwindow.get_keyboard()
+        self.keyboard_sub = self.input.subscribe_to_keyboard_events(
+            self.keyboard,
+            lambda event, *args, obj=weakref.proxy(self): obj.on_keyboard_event(event, *args),
+        )
+
+    def close(self) -> None:
+        if self.keyboard_sub is not None:
+            self.input.unsubscribe_to_keyboard_events(self.keyboard, self.keyboard_sub)
+            self.keyboard_sub = None
+
+    def consume_start(self) -> bool:
+        requested = self.start_requested
+        self.start_requested = False
+        return requested
+
+    def consume_reset(self) -> str | None:
+        reason = self.reset_reason
+        self.reset_reason = None
+        return reason
+
+    def on_keyboard_event(self, event, *args, **kwargs) -> None:
+        if event.type != carb.input.KeyboardEventType.KEY_PRESS:
+            return
+        key_name = event.input.name
+        if key_name == "B":
+            self.start_requested = True
+        elif key_name == "R":
+            self.start_requested = False
+            self.reset_reason = "failure"
+        elif key_name == "N":
+            self.start_requested = False
+            self.reset_reason = "success"
+
+    def display_controls(self) -> None:
+        print(
+            "\n".join(
+                [
+                    "Policy Controls",
+                    "  B: start policy inference",
+                    "  R: stop inference and reset (failure)",
+                    "  N: stop inference and reset (success)",
+                    "  Ctrl+C: quit",
+                ]
+            ),
+            flush=True,
+        )
+
+
+def port_is_open(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def to_uint8_image(image: torch.Tensor) -> np.ndarray:
@@ -199,18 +382,10 @@ def extract_observations(reset_or_step_result) -> dict[str, Any]:
 
 
 def main() -> None:
-    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
-    env_cfg.use_teleop_device("so101leader")
-    env_cfg.recorders = None
-    configure_camera_mode(env_cfg, args_cli.camera_mode)
-    if args_cli.ground_mode == "off":
-        delete_attribute(env_cfg.scene, "ground")
-    env_cfg.sim.render_interval = args_cli.render_interval
-    if hasattr(env_cfg.terminations, "time_out"):
-        env_cfg.terminations.time_out = None
-
-    env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    env = None
     client: IsaacLabAsyncPolicyClient | None = None
+    keyboard: PolicyKeyboard | None = None
+    tunnel: ManagedSshTunnel | None = None
     interrupted = False
 
     def handle_sigint(_signum, _frame) -> None:
@@ -224,10 +399,34 @@ def main() -> None:
     send_failures = 0
 
     try:
+        server_address = args_cli.server_address
+        if args_cli.ssh_host:
+            tunnel = ManagedSshTunnel(
+                host=args_cli.ssh_host,
+                port=args_cli.ssh_port,
+                user=args_cli.ssh_user,
+                local_port=args_cli.ssh_local_port,
+                remote_port=args_cli.ssh_remote_port,
+                connect_timeout_s=args_cli.ssh_connect_timeout_s,
+            )
+            tunnel.start()
+            server_address = f"127.0.0.1:{args_cli.ssh_local_port}"
+
+        env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+        env_cfg.use_teleop_device("so101leader")
+        env_cfg.recorders = None
+        configure_camera_mode(env_cfg, args_cli.camera_mode)
+        if args_cli.ground_mode == "off":
+            delete_attribute(env_cfg.scene, "ground")
+        env_cfg.sim.render_interval = args_cli.render_interval
+        if hasattr(env_cfg.terminations, "time_out"):
+            env_cfg.terminations.time_out = None
+
+        env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
         observations = extract_observations(env.reset())
         front = to_uint8_image(observations["policy"]["front"])
         client = IsaacLabAsyncPolicyClient(
-            server_address=args_cli.server_address,
+            server_address=server_address,
             policy_type=args_cli.policy_type,
             policy_path=args_cli.policy_path,
             policy_device=args_cli.policy_device,
@@ -241,38 +440,81 @@ def main() -> None:
         print("LWH_ASYNC_POLICY_CLIENT_LOADING_POLICY", flush=True)
         client.start()
 
-        last_action = hold_current_joint_action(observations, env.device)
-        client.send_observation(raw_policy_observation(observations, args_cli.task_description))
-        first_chunk_deadline = time.perf_counter() + max(args_cli.timeout_s, 10.0)
-        while client.received_chunks == 0 and simulation_app.is_running() and not interrupted:
-            if client.last_error is not None:
-                raise RuntimeError(f"Policy server failed before the first action chunk: {client.last_error}")
-            if time.perf_counter() >= first_chunk_deadline:
-                raise TimeoutError("Timed out waiting for the first action chunk from PolicyServer.")
-            env.sim.render()
-            time.sleep(0.01)
-
-        if interrupted or not simulation_app.is_running():
-            return
-
         control_hz = 1.0 / env.step_dt
         if args_cli.policy_hz > control_hz:
             raise ValueError(f"policy_hz {args_cli.policy_hz} exceeds simulation control_hz {control_hz}.")
         policy_interval_steps = max(1, round(control_hz / args_cli.policy_hz))
         effective_policy_hz = control_hz / policy_interval_steps
         rate_limiter = RateLimiter(control_hz)
-        loop_started_at = time.perf_counter()
+        keyboard = PolicyKeyboard()
+        keyboard.display_controls()
+        last_action = hold_current_joint_action(observations, env.device)
+        policy_active = False
+        start_pending = False
+        expected_chunk_count = 0
+        first_chunk_deadline = 0.0
+        episode_steps = 0
+        episode_started_at = time.perf_counter()
         print(
-            f"LWH_ASYNC_POLICY_CLIENT_READY task={args_cli.task} control_hz={control_hz:.1f} "
+            f"LWH_ASYNC_POLICY_CLIENT_WAITING_FOR_B task={args_cli.task} "
+            f"server={server_address} control_hz={control_hz:.1f} "
             f"policy_hz={effective_policy_hz:.1f} actions_per_chunk={args_cli.actions_per_chunk} "
             f"chunk_size_threshold={args_cli.chunk_size_threshold:.2f} camera_mode={args_cli.camera_mode} "
-            f"initial_queue={client.queue_size()} real_robot_access=False",
+            "real_robot_access=False",
             flush=True,
         )
 
         while simulation_app.is_running() and not interrupted:
             if args_cli.max_steps and control_steps >= args_cli.max_steps:
                 break
+
+            reset_reason = keyboard.consume_reset()
+            start_requested = keyboard.consume_start()
+            if reset_reason is not None:
+                observations = extract_observations(env.reset())
+                client.reset()
+                last_action = hold_current_joint_action(observations, env.device)
+                policy_active = False
+                start_pending = False
+                episode_steps = 0
+                print(
+                    f"LWH_ASYNC_POLICY_CLIENT_RESET result={reset_reason} "
+                    f"steps={control_steps} waiting_for_b=True",
+                    flush=True,
+                )
+
+            if start_requested and not policy_active and not start_pending:
+                client.reset()
+                expected_chunk_count = client.received_chunks + 1
+                client.send_observation(
+                    raw_policy_observation(observations, args_cli.task_description)
+                )
+                first_chunk_deadline = time.perf_counter() + max(args_cli.timeout_s, 10.0)
+                start_pending = True
+                print("LWH_ASYNC_POLICY_CLIENT_PREPARING", flush=True)
+
+            if not policy_active:
+                if start_pending and client.received_chunks >= expected_chunk_count:
+                    if client.queue_size() < 1:
+                        raise RuntimeError("PolicyServer returned an empty action chunk.")
+                    policy_active = True
+                    start_pending = False
+                    episode_steps = 0
+                    episode_started_at = time.perf_counter()
+                    rate_limiter.reset()
+                    print(
+                        f"LWH_ASYNC_POLICY_CLIENT_STARTED initial_queue={client.queue_size()}",
+                        flush=True,
+                    )
+                elif start_pending and time.perf_counter() >= first_chunk_deadline:
+                    raise TimeoutError(
+                        "Timed out waiting for the first action chunk from PolicyServer: "
+                        f"{client.last_error or 'no server error'}"
+                    )
+                else:
+                    env.sim.render()
+                    time.sleep(1.0 / 60.0)
+                    continue
 
             policy_tick = control_steps % policy_interval_steps == 0
             if policy_tick:
@@ -301,9 +543,13 @@ def main() -> None:
             observations = step_result[0]
             done = torch.logical_or(step_result[2], step_result[3])
             control_steps += 1
+            episode_steps += 1
 
             if args_cli.log_interval and control_steps % args_cli.log_interval == 0:
-                wall_hz = control_steps / max(time.perf_counter() - loop_started_at, 1.0e-6)
+                wall_hz = episode_steps / max(
+                    time.perf_counter() - episode_started_at,
+                    1.0e-6,
+                )
                 latency = client.latency_metrics()
                 print(
                     f"LWH_ASYNC_POLICY_CLIENT_STEP steps={control_steps} "
@@ -321,14 +567,26 @@ def main() -> None:
                 observations = extract_observations(env.reset())
                 client.reset()
                 last_action = hold_current_joint_action(observations, env.device)
-                print(f"LWH_ASYNC_POLICY_CLIENT_RESET steps={control_steps}", flush=True)
+                policy_active = False
+                start_pending = False
+                episode_steps = 0
+                print(
+                    f"LWH_ASYNC_POLICY_CLIENT_RESET result=environment_done "
+                    f"steps={control_steps} waiting_for_b=True",
+                    flush=True,
+                )
 
             rate_limiter.sleep()
     finally:
         signal.signal(signal.SIGINT, previous_sigint_handler)
+        if keyboard is not None:
+            keyboard.close()
         if client is not None:
             client.stop()
-        env.close()
+        if env is not None:
+            env.close()
+        if tunnel is not None:
+            tunnel.stop()
 
     latency = client.latency_metrics() if client is not None else {}
     print(

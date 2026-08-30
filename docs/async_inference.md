@@ -74,15 +74,30 @@ PolicyServer 在服务器的 LeRobot 环境运行，IsaacLab client 留在本机
 - 启动时先预填首个 action chunk，再开始策略控制。
 - 5 秒未收到 chunk 时允许重试；队列为空时保持上一关节目标。
 
-连接建立后，客户端使用 `--server_address 127.0.0.1:18080` 访问本地转发端口。
-网络中断或 action queue 暂时为空时，仿真保持上一关节目标，不会访问真实机器人。
+客户端设置 `--ssh_host` 后会启动 `ssh -N` 子进程，并通过本地转发端口访问服务器；
+退出客户端时隧道会一并关闭，不需要第三个终端。示例：
+
+```bash
+python3 scripts/run_policy_client.py \
+  --task Lwh-SO101-Table-v0 \
+  --ssh_host 183.147.142.40 \
+  --ssh_port 31361 \
+  --policy_path /root/gpufree-data/lwh_lerobot_data/runs/act_video_b32_50k_20260823_184025/checkpoints/030000/pretrained_model \
+  --policy_device cuda
+```
+
+客户端加载完成后等待按 B，收到首个 action chunk 才开始控制。R/N 会停止推理、清空
+新旧 action queue 并重置场景；重置后需再次按 B。网络中断或 action queue 暂时为空时，
+仿真保持上一关节目标，不会访问真实机器人。
 
 ## 关键参数
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `--actions_per_chunk` | `30` | 每次推理返回的动作数；公网部署实测推荐 `60`，ACT checkpoint 最大为 `100`。 |
-| `--chunk_size_threshold` | `0.5` | 队列剩余比例低于该值时发送新观测；公网部署实测推荐 `0.65`。 |
+| `--actions_per_chunk` | `60` | 每次推理返回的动作数，即 30 Hz 下约 2 秒动作。 |
+| `--chunk_size_threshold` | `0.65` | 队列剩余比例低于该值时发送新观测。 |
+| `--ssh_host` | 未设置 | 设置后自动建立 SSH 隧道。 |
+| `--ssh_port` | `22` | 云平台映射的 SSH 端口。 |
 | `--aggregate_fn_name` | `weighted_average` | 按官方规则融合重叠 timestep 的动作。 |
 | `--policy_hz` | `30` | 本地 action queue 的消费频率，需与训练数据 FPS 一致。 |
 | `--render_interval` | `2` | 60 Hz physics 下每两步更新一次相机，即约 30 Hz。 |

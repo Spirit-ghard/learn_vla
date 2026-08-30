@@ -411,7 +411,7 @@ docs/stage4_validation.md
 
 ## Stage 6：远程推理
 
-状态：异步 client/server 已实现，本机端到端验证通过；远程网络链路待部署时验证。
+状态：异步 client/server 已实现，本机及远程服务器端到端验证通过。
 
 目标：
 
@@ -422,9 +422,11 @@ docs/stage4_validation.md
 
 - observation 为 6D joint state 加 `front+wrist` 两路 `480x640 RGB uint8`。
 - action chunk 为带 timestamp/timestep 的 `N x 6` joint position。
-- 默认 `actions_per_chunk=30`、`chunk_size_threshold=0.5`、`policy_hz=30`。
+- 默认 `actions_per_chunk=60`、`chunk_size_threshold=0.65`、`policy_hz=30`。
 - 使用 LeRobot 官方 gRPC service、2 MiB observation 分块和重叠 chunk 聚合规则。
 - reset 清空本地 action queue，并通过官方 `Ready` 清空服务端观测状态，不重复加载模型。
+- 设置 `--ssh_host` 后由客户端创建和回收 SSH 隧道，远程运行只需要服务器和本机两个终端。
+- `B` 开始请求并执行策略；`R/N` 停止策略、重置环境并等待再次按 `B`。
 - 服务断开时先保持最后一个关节目标；连续三次 observation 发送失败后安全退出仿真。
 
 验证：
@@ -432,6 +434,8 @@ docs/stage4_validation.md
 - ACT checkpoint 单次观测可返回 30 个有限的 6D action。
 - 队列消费到 50% 后可接收重叠 chunk，并得到连续 timestep。
 - IsaacLab 双相机 headless 实际运行 120 step，通过 60 Hz physics / 30 Hz policy 配置消费 action queue。
+- RTX 4090 远程服务端加本机 RTX 3060 GUI 双相机已完成 360 step 验证，60-action chunk 队列欠载为 0。
+- 已验证推理开始前等待 B、在途请求期间 R reset、执行期间 N reset，以及退出后 SSH 隧道自动释放。
 - 不使用真实机器人；远程部署建议使用 SSH 隧道，不把 pickle gRPC 服务直接暴露到公网。
 
 记录：

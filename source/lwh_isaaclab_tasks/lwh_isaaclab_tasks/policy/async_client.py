@@ -128,6 +128,7 @@ class IsaacLabAsyncPolicyClient:
         self.observation_pending = threading.Event()
         self.chunk_request_pending = threading.Event()
         self.chunk_request_started_at = 0.0
+        self.minimum_action_timestamp = 0.0
         self.received_chunks = 0
         self.queued_observations = 0
         self.sent_observations = 0
@@ -211,6 +212,7 @@ class IsaacLabAsyncPolicyClient:
 
     def reset(self) -> None:
         """清空本地 action queue；官方 Ready 会清空服务端观测队列但不重载模型。"""
+        self.minimum_action_timestamp = time.time()
         with self.action_queue_lock:
             self.action_queue = Queue()
         with self.latest_action_lock:
@@ -304,7 +306,8 @@ class IsaacLabAsyncPolicyClient:
                     self.must_go.set()
             finally:
                 self.sender_busy.clear()
-                self.observation_pending.clear()
+                if self.observation_queue.empty():
+                    self.observation_pending.clear()
 
     def receive_actions(self) -> None:
         """独立线程持续等待服务端 chunk，模型推理不会阻塞 IsaacLab 主循环。"""
@@ -318,6 +321,12 @@ class IsaacLabAsyncPolicyClient:
                     continue
                 payload = pickle.loads(response.data)  # nosec B301: trusted policy server only.
                 incoming_actions = self.parse_actions(payload)
+                # reset 期间可能仍有旧请求在网络中，旧 chunk 不能进入新场景。
+                if (
+                    incoming_actions
+                    and incoming_actions[0].timestamp < self.minimum_action_timestamp
+                ):
+                    continue
                 if incoming_actions:
                     chunk_latency_ms = max(
                         0.0,
