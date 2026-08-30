@@ -238,8 +238,8 @@ class ManagedSshTunnel:
             f"local_port={self.local_port} remote_port={self.remote_port}",
             flush=True,
         )
-        # 独立进程组避免 Ctrl+C 越过客户端清理逻辑直接终止隧道。
-        self.process = subprocess.Popen(command, start_new_session=True)
+        # 继承当前终端，OpenSSH 才能直接读取用户输入的密码。
+        self.process = subprocess.Popen(command)
         deadline = time.perf_counter() + self.connect_timeout_s
         while time.perf_counter() < deadline:
             return_code = self.process.poll()
