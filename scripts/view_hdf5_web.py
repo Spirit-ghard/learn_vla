@@ -256,6 +256,51 @@ def file_summary(path: Path) -> dict[str, Any]:
         }
 
 
+def delete_episode(path: Path, episode_id: str) -> dict[str, Any]:
+    """删除一个 episode 及其对应的 /episodes 硬链接。"""
+    with h5py.File(path, "r+") as h5_file:
+        root = episode_root(h5_file)
+        if episode_id not in root:
+            raise KeyError(f"Episode not found: {episode_id}")
+
+        group = root[episode_id]
+        episode_index = (
+            int(group.attrs["episode_index"])
+            if "episode_index" in group.attrs
+            else episode_sort_key(episode_id)
+        )
+        data_group = h5_file.get("data")
+        episodes_group = h5_file.get("episodes")
+
+        if root.name == "/data":
+            del root[episode_id]
+            if episodes_group is not None:
+                link_name = f"{episode_index:06d}"
+                if link_name in episodes_group:
+                    del episodes_group[link_name]
+                else:
+                    for candidate in list(episodes_group.keys()):
+                        candidate_group = episodes_group[candidate]
+                        if int(candidate_group.attrs.get("episode_index", -1)) == episode_index:
+                            del episodes_group[candidate]
+                            break
+        else:
+            del root[episode_id]
+            if data_group is not None:
+                data_name = f"demo_{episode_index}"
+                if data_name in data_group:
+                    del data_group[data_name]
+
+        h5_file.flush()
+
+    FRAME_CACHE.clear_file(path)
+    return {
+        "deleted_episode": episode_id,
+        "episode_index": episode_index,
+        "summary": file_summary(path),
+    }
+
+
 def sample_frame(path: Path, episode_id: str, frame_index: int) -> dict[str, Any]:
     with h5py.File(path, "r") as h5_file:
         group = episode_root(h5_file)[episode_id]
@@ -353,6 +398,13 @@ class FrameCache:
         self._store.move_to_end(key)
         while len(self._store) > self._max_entries:
             self._store.popitem(last=False)
+
+    def clear_file(self, path: Path) -> None:
+        """文件被修改后清除该文件的旧帧缓存。"""
+        path_key = str(path)
+        for key in list(self._store.keys()):
+            if key[0] == path_key:
+                del self._store[key]
 
 
 FRAME_CACHE = FrameCache()
@@ -682,6 +734,25 @@ class ViewerHandler(BaseHTTPRequestHandler):
             else:
                 content_type = mimetypes.guess_type(path)[0] or "text/plain"
                 self.send_error(HTTPStatus.NOT_FOUND, f"Not found: {path} ({content_type})")
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:
+            try:
+                self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """删除网页当前选中的 HDF5 episode。"""
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        parts = path.strip("/").split("/")
+        try:
+            if len(parts) != 5 or parts[0] != "api" or parts[1] != "files" or parts[3] != "episodes":
+                self.send_error(HTTPStatus.NOT_FOUND, f"Not found: {path}")
+                return
+            result = delete_episode(self.catalog.resolve(parts[2]), parts[4])
+            self.send_json(result)
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception as exc:
@@ -1198,6 +1269,10 @@ INDEX_HTML = r"""<!doctype html>
       grid-template-columns: 1fr 1fr;
     }
 
+    .episode-actions {
+      grid-template-columns: 1fr 1.35fr 1fr;
+    }
+
     button {
       height: 36px;
       padding: 0 12px;
@@ -1216,6 +1291,12 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--accent);
       color: #fff;
       border-color: var(--accent);
+    }
+
+    button.danger {
+      color: #9d3026;
+      border-color: rgba(157, 48, 38, 0.42);
+      background: #fff8f6;
     }
 
     button:disabled {
@@ -1488,6 +1569,11 @@ INDEX_HTML = r"""<!doctype html>
             <button id="playButton" type="button" class="primary">Play</button>
             <button id="nextButton" type="button">Next</button>
           </div>
+          <div class="button-row episode-actions">
+            <button id="prevEpisodeButton" type="button">上一段</button>
+            <button id="deleteEpisodeButton" type="button" class="danger">删除当前</button>
+            <button id="nextEpisodeButton" type="button">下一段</button>
+          </div>
           <div class="field">
             <label for="speedSelect">Speed</label>
             <select id="speedSelect">
@@ -1594,6 +1680,9 @@ INDEX_HTML = r"""<!doctype html>
       prevButton: document.getElementById("prevButton"),
       playButton: document.getElementById("playButton"),
       nextButton: document.getElementById("nextButton"),
+      prevEpisodeButton: document.getElementById("prevEpisodeButton"),
+      deleteEpisodeButton: document.getElementById("deleteEpisodeButton"),
+      nextEpisodeButton: document.getElementById("nextEpisodeButton"),
       speedSelect: document.getElementById("speedSelect"),
       frameSlider: document.getElementById("frameSlider"),
       frameValue: document.getElementById("frameValue"),
@@ -1635,8 +1724,8 @@ INDEX_HTML = r"""<!doctype html>
       els.statusDot.className = `dot ${kind}`;
     }
 
-    async function api(path) {
-      const response = await fetch(path);
+    async function api(path, options = {}) {
+      const response = await fetch(path, options);
       const payload = await response.json();
       if (!response.ok || payload.error) {
         throw new Error(payload.error || response.statusText);
@@ -1665,6 +1754,18 @@ INDEX_HTML = r"""<!doctype html>
     function currentEpisode() {
       if (!state.summary) return null;
       return state.summary.episodes.find((episode) => episode.id === state.episodeId) || null;
+    }
+
+    function episodeList() {
+      return state.summary ? state.summary.episodes || [] : [];
+    }
+
+    function updateEpisodeNavigation() {
+      const episodes = episodeList();
+      const index = episodes.findIndex((episode) => episode.id === state.episodeId);
+      els.prevEpisodeButton.disabled = index <= 0;
+      els.nextEpisodeButton.disabled = index < 0 || index >= episodes.length - 1;
+      els.deleteEpisodeButton.disabled = index < 0;
     }
 
     function formatVector(values) {
@@ -1995,7 +2096,7 @@ INDEX_HTML = r"""<!doctype html>
       await loadSummary(state.files[0].id);
     }
 
-    async function loadSummary(fileId) {
+    async function loadSummary(fileId, preferredEpisodeId = null) {
       stopPlayback();
       state.fileId = fileId;
       state.summary = await api(`/api/files/${fileId}/summary`);
@@ -2008,8 +2109,9 @@ INDEX_HTML = r"""<!doctype html>
       els.qualityList.innerHTML = "";
       els.qualityDownload.disabled = true;
       const episodes = state.summary.episodes || [];
-      state.cameras = episodes[0]?.camera_keys || state.summary.camera_keys || [];
-      state.episodeId = episodes[0]?.id || null;
+      const selectedEpisode = episodes.find((episode) => episode.id === preferredEpisodeId) || episodes[0] || null;
+      state.cameras = selectedEpisode?.camera_keys || state.summary.camera_keys || [];
+      state.episodeId = selectedEpisode?.id || null;
       fillSelect(
         els.episodeSelect,
         episodes.map((episode) => ({
@@ -2022,9 +2124,54 @@ INDEX_HTML = r"""<!doctype html>
       state.frame = 0;
       els.fpsValue.textContent = String(state.fps);
       updateEpisodeReadout();
+      updateEpisodeNavigation();
       setStatus("Ready", "ok");
       await loadSeries();
       await renderFrame();
+    }
+
+    async function selectEpisode(episodeId) {
+      if (!episodeList().some((episode) => episode.id === episodeId)) return;
+      stopPlayback();
+      state.episodeId = episodeId;
+      const episode = currentEpisode();
+      state.cameras = episode?.camera_keys || state.summary?.camera_keys || [];
+      configureCameraSlots();
+      state.frame = 0;
+      state.imageLoading = { front: false, wrist: false, overview: false };
+      state.sampleLoading = false;
+      state.sampleRequestId += 1;
+      updateEpisodeReadout();
+      updateEpisodeNavigation();
+      await loadSeries();
+      await renderFrame();
+    }
+
+    async function moveEpisode(offset) {
+      const episodes = episodeList();
+      const index = episodes.findIndex((episode) => episode.id === state.episodeId);
+      const nextIndex = index + offset;
+      if (index < 0 || nextIndex < 0 || nextIndex >= episodes.length) return;
+      await selectEpisode(episodes[nextIndex].id);
+    }
+
+    async function deleteCurrentEpisode() {
+      const episode = currentEpisode();
+      if (!state.fileId || !episode) return;
+      if (!window.confirm(`确定删除 ${episode.label} 吗？此操作会修改 HDF5 文件。`)) return;
+
+      const episodes = episodeList();
+      const index = episodes.findIndex((item) => item.id === episode.id);
+      const fallback = episodes[index + 1] || episodes[index - 1] || null;
+      stopPlayback();
+      setStatus(`正在删除 ${episode.label}`);
+      try {
+        await api(`/api/files/${state.fileId}/episodes/${encodeURIComponent(episode.id)}`, { method: "DELETE" });
+        await loadSummary(state.fileId, fallback?.id || null);
+        setStatus(`已删除 ${episode.label}`, "ok");
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
     }
 
     function updateEpisodeReadout() {
@@ -2184,19 +2331,15 @@ INDEX_HTML = r"""<!doctype html>
       els.uploadInput.value = "";
     });
     els.episodeSelect.addEventListener("change", async () => {
-      stopPlayback();
-      state.episodeId = els.episodeSelect.value;
-      const episode = currentEpisode();
-      state.cameras = episode?.camera_keys || state.summary?.camera_keys || [];
-      configureCameraSlots();
-      state.frame = 0;
-      state.imageLoading = { front: false, wrist: false, overview: false };
-      state.sampleLoading = false;
-      state.sampleRequestId += 1;
-      updateEpisodeReadout();
-      await loadSeries();
-      renderFrame();
+      try {
+        await selectEpisode(els.episodeSelect.value);
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
     });
+    els.prevEpisodeButton.addEventListener("click", () => moveEpisode(-1).catch((error) => setStatus(error.message, "bad")));
+    els.nextEpisodeButton.addEventListener("click", () => moveEpisode(1).catch((error) => setStatus(error.message, "bad")));
+    els.deleteEpisodeButton.addEventListener("click", () => deleteCurrentEpisode());
     els.qualityButton.addEventListener("click", () => loadQuality());
     els.qualityDownload.addEventListener("click", () => downloadQuality());
     els.toggleVectorButton.addEventListener("click", () => setVectorOverlayVisible(!state.showVectors));

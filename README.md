@@ -14,48 +14,56 @@
 cd /home/a/lwh_code/lwh_robot_learning
 git checkout stage_4
 ```
+## 参数修改:
+#### robot，相机等位置在so101_table_env_cfg.py的顶部
+## 常用流程：
 
-常用流程：
+#### 0.场景
+```bash
+python3 scripts/run_env.py
+```
+#### 0.遥操
+```bash
+cd /home/a/lwh_code/lwh_robot_learning
+python3 scripts/teleop.py --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --camera_mode dual
+```
 
 #### 1.启动录制
 ```bash 
 conda activate isaac
-python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --teleop_device so101leader --leader_port /dev/ttyACM0 --camera_mode triple --output datasets/hdf5/lwh_so101_table_leader.hdf5 --overwrite
+python3 scripts/teleop.py --record --task Lwh-SO101-Table-v0 --num_envs 1 --camera_mode dual --output datasets/hdf5/lwh_so101_table_leader.hdf5
 ```
-#### 2.数据转换
 ```bash
-conda activate lerobot05
-python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
-```
-#### 3.sim回放数据
-```
-conda activate lerobot05
-python3 scripts/replay_hdf5.py --task Lwh-SO101-Table-v0 --dataset_file datasets/hdf5/lwh_so101_table_leader.hdf5
-```
-#### 4.web可视化数据
-```
-conda activate lerobot05
-python3 scripts/view_hdf5_web.py --file datasets/hdf5/lwh_so101_table_leader.hdf5 --port 7860
-```
-
-录制 episode 生命周期：
-
-```text
 B 开始当前 episode 的操作和录制
 R 结束当前 episode，标记 failure，然后 reset
 N 结束当前 episode，标记 success，然后 reset
 Ctrl+C 安全关闭文件；未用 R/N 结束的当前 episode 会被废弃
 ```
 
-HDF5 回放按键：
+#### 2.web可视化数据
+```bash
+conda activate lerobot05
+python3 scripts/view_hdf5_web.py --file datasets/hdf5/lwh_so101_table_leader.hdf5
+```
+#### 3.数据转换
+```bash
+conda activate lerobot05
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
+```
+可按训练需求选择使用哪些数据：
 
-```text
-B / Space 暂停或继续
-N / Right 切到下一个 episode
-P / Left 切到上一个 episode
-R 重新加载当前 episode
-S 暂停时单步回放
-Q / Esc 退出
+```bash
+# 默认转换 successful episode，并使用 HDF5 里的 training_camera_keys，通常是 front,wrist
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table --output_dir datasets/lerobot/so101_table --overwrite
+
+# 只使用 front 单相机训练
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table_front --output_dir datasets/lerobot/so101_table_front --camera_keys front --overwrite
+
+# 使用 front+wrist 双相机训练
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table_dual --output_dir datasets/lerobot/so101_table_dual --camera_keys front,wrist --overwrite
+
+# 转换所有 episode；默认只转换 success
+python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table_leader.hdf5 --repo_id lwh/so101_table_all --output_dir datasets/lerobot/so101_table_all --episodes all --overwrite
 ```
 
 ## 关键参数
@@ -114,3 +122,23 @@ metadata/camera_keys: HDF5 中实际录制的相机，例如 front,wrist,overvie
 metadata/training_camera_keys: 默认进入 LeRobot 的相机，通常只有 front,wrist
 lerobot conversion: 默认只转换 success episode，默认跳过 episode 前 5 帧，默认不转换 overview
 ```
+
+## 异步策略推理
+
+终端一使用 LeRobot 环境启动官方 PolicyServer：
+
+```bash
+conda activate lerobot05
+python3 scripts/serve_lerobot_policy.py --host 127.0.0.1 --port 8080 --fps 30
+```
+
+终端二使用 Isaac 环境启动仿真客户端：
+
+```bash
+conda activate isaac
+python3 scripts/run_policy_client.py --task Lwh-SO101-Table-v0 --server_address 127.0.0.1:8080 --policy_path checkpoints/act_so101_table_030000 --policy_device cuda --actions_per_chunk 30 --chunk_size_threshold 0.5
+```
+
+客户端以 30 Hz 消费本地 action queue，IsaacLab 继续以 60 Hz step；模型推理不会阻塞
+仿真主循环。`--policy_path` 是服务端可见的 checkpoint 路径，远程部署时应填写服务器
+路径。完整参数见 `docs/async_inference.md`。

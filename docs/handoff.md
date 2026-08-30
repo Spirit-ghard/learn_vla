@@ -1,6 +1,6 @@
 # Handoff
 
-更新时间：2026-08-13
+更新时间：2026-08-30
 
 ## 当前交接状态
 
@@ -24,6 +24,7 @@ origin git@github.com:Spirit-ghard/learn_vla.git
 - Stage 4：HDF5 回放入口，支持 episode 切换、暂停、继续、单步和退出。
 - Stage 4：回放 GUI 默认 `--viewer_layout tri`，上排显示 front+wrist，占约 40%；下排显示主视角。
 - 标定工具：`scripts/calibrate_so101.py` 支持 `--arm leader|follower` 的检查、导入和 LeRobot 标定；旧 `calibrate_so101_leader.py` 作为兼容入口保留。
+- Stage 6：LeRobot 官方风格异步 PolicyServer、action chunk、本地 action queue 和 IsaacLab 仿真客户端已完成本机端到端验证。
 
 ## 当前可用命令
 
@@ -79,6 +80,20 @@ LeRobot 环境中重新标定：
 conda activate lerobot05
 python3 scripts/calibrate_so101.py --arm leader --calibrate --port /dev/ttyACM0 --output configs/so101_leader_calibration.json
 python3 scripts/calibrate_so101.py --arm follower --calibrate --port /dev/ttyACM1 --output configs/so101_follower_calibration.json
+```
+
+异步策略服务端：
+
+```bash
+conda activate lerobot05
+python3 scripts/serve_lerobot_policy.py --host 127.0.0.1 --port 8080 --fps 30
+```
+
+异步仿真客户端：
+
+```bash
+conda activate isaac
+python3 scripts/run_policy_client.py --task Lwh-SO101-Table-v0 --server_address 127.0.0.1:8080 --policy_path checkpoints/act_so101_table_030000 --policy_device cuda --actions_per_chunk 30 --chunk_size_threshold 0.5
 ```
 
 ## 注意事项

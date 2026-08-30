@@ -27,13 +27,24 @@ ensure_isaac_runtime(supervise_validation=VALIDATION_MODE)
 from isaaclab.app import AppLauncher
 
 
+def next_available_output_path(path: Path) -> Path:
+    """目标文件存在时生成 _01/_02 后缀文件名。"""
+    if not path.exists():
+        return path
+    for index in range(1, 10000):
+        candidate = path.with_name(f"{path.stem}_{index:02d}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"Cannot find an available HDF5 output path near: {path}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Record an LWH IsaacLab teleoperation session to HDF5.")
     parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments. Recording supports 1.")
     parser.add_argument(
         "--teleop_device",
-        default="keyboard",
+        default="so101leader",
         choices=["keyboard", "so101leader"],
         help="Teleoperation input device. so101leader only reads the real leader arm and drives simulation.",
     )
@@ -41,13 +52,13 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="HDF5 file path. Existing files require --overwrite or --append.",
+        help="HDF5 file path. Existing files auto-increment to _01/_02 unless --overwrite or --append is used.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Delete an existing output HDF5 file before recording.")
     parser.add_argument("--append", action="store_true", help="Append new episodes to an existing HDF5 file.")
     parser.add_argument(
         "--camera_mode",
-        default="front",
+        default="dual",
         choices=["front", "dual", "triple"],
         help=(
             "Camera set to record. front records front; dual records front+wrist; "
@@ -112,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--leader_start_immediately",
         action="store_true",
-        help="Start SO101 leader control immediately instead of waiting for B.",
+        help="Mark the first recording episode active immediately; leader position sync is always immediate.",
     )
     parser.add_argument(
         "--leader_keep_torque",
@@ -134,7 +145,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--chunk_size must be positive.")
     if args.min_frames < 1:
         parser.error("--min_frames must be positive.")
-    args.output = args.output.expanduser().resolve()
+    args.requested_output = args.output.expanduser().resolve()
+    args.output = args.requested_output
+    if not args.overwrite and not args.append:
+        args.output = next_available_output_path(args.requested_output)
     args.enable_cameras = True
     if args.rendering_mode is None and args.teleop_rendering_mode is not None:
         args.rendering_mode = args.teleop_rendering_mode
@@ -185,7 +199,7 @@ def write_process_status(status: str) -> None:
 
 
 def build_validation_input() -> tuple[object, object, dict[int, tuple[object, object]]]:
-    """构造一段成功 episode 和一段失败 episode 的 Carb 键盘事件。"""
+    """构造一段成功 episode 和一段会被丢弃的失败 episode。"""
     import omni.appwindow
 
     provider = carb.input.acquire_input_provider()
@@ -292,6 +306,7 @@ class HDF5TeleopRecorder:
         self.compression = None if compression == "none" else compression
         self.chunk_size = chunk_size
         self.min_frames = min_frames
+        self.append = append
         self._file = h5py.File(path, "a" if append else "w")
         self._data_group = self._file.require_group("data")
         self._episodes_group = self._file.require_group("episodes")
@@ -496,7 +511,7 @@ class HDF5TeleopRecorder:
         return summary
 
     def discard_episode(self, *, reason: str) -> dict[str, Any] | None:
-        """废弃未用 R/N 正式结束的 episode，避免 Ctrl+C 留下脏数据。"""
+        """废弃失败、中断或帧数不足的 episode。"""
         if self._episode_group is None or self._episode_index is None:
             return None
 
@@ -520,8 +535,11 @@ class HDF5TeleopRecorder:
         }
 
     def close(self) -> None:
+        remove_empty_file = (not self.append) and len(self._data_group.keys()) == 0
         self._file.flush()
         self._file.close()
+        if remove_empty_file:
+            self.path.unlink(missing_ok=True)
 
     def _append_dataset(self, path: str, value: Any) -> None:
         if self._episode_group is None:
@@ -648,9 +666,9 @@ def validate_hdf5_recording(path: Path, *, expected_camera_keys: list[str], expe
         if "data" not in h5_file or "episodes" not in h5_file or "metadata" not in h5_file:
             raise AssertionError("HDF5 file misses one of required groups: data, episodes, metadata.")
         demo_names = sorted(h5_file["data"].keys(), key=lambda name: int(name.rsplit("_", 1)[-1]))
-        if len(demo_names) != 2:
-            raise AssertionError(f"Expected two validation episodes, got {demo_names}.")
-        if sorted(h5_file["episodes"].keys()) != ["000000", "000001"]:
+        if len(demo_names) != 1:
+            raise AssertionError(f"Expected one saved validation episode, got {demo_names}.")
+        if sorted(h5_file["episodes"].keys()) != ["000000"]:
             raise AssertionError(f"Unexpected /episodes links: {sorted(h5_file['episodes'].keys())}.")
 
         metadata = h5_file["metadata"]
@@ -667,10 +685,9 @@ def validate_hdf5_recording(path: Path, *, expected_camera_keys: list[str], expe
             raise AssertionError(f"Unexpected training_camera_keys metadata: {training_camera_keys}")
 
         summaries: list[dict[str, Any]] = []
-        expected_success = [True, False]
-        for demo_name, success in zip(demo_names, expected_success, strict=True):
+        for demo_name in demo_names:
             group = h5_file["data"][demo_name]
-            if bool(group.attrs["success"]) is not success:
+            if not bool(group.attrs["success"]):
                 raise AssertionError(f"{demo_name} success mismatch: {group.attrs['success']}")
             num_samples = int(group.attrs["num_samples"])
             if num_samples < 10:
@@ -697,7 +714,7 @@ def validate_hdf5_recording(path: Path, *, expected_camera_keys: list[str], expe
             summaries.append(
                 {
                     "name": demo_name,
-                    "success": success,
+                    "success": True,
                     "num_samples": num_samples,
                     "action_shape": list(group["action"].shape),
                     "state_shape": list(group["observation/state"].shape),
@@ -716,6 +733,11 @@ def validate_hdf5_recording(path: Path, *, expected_camera_keys: list[str], expe
 def main() -> None:
     if args_cli.num_envs != 1:
         raise ValueError("HDF5 recording currently supports exactly --num_envs 1.")
+    if args_cli.output != args_cli.requested_output:
+        print(
+            f"LWH_RECORD_OUTPUT_AUTO_INCREMENT requested={args_cli.requested_output} output={args_cli.output}",
+            flush=True,
+        )
 
     if VALIDATION_MODE:
         VALIDATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -866,14 +888,24 @@ def main() -> None:
                 if pending_reset is not None or isinstance(action, dict):
                     outcome = pending_reset or "failure"
                     if recorder.is_recording:
-                        summary = recorder.finish_episode(success=(outcome == "success"), outcome=outcome)
-                        finished_episodes.append(summary)
-                        print(
-                            f"LWH_RECORD_EPISODE_FINISHED index={summary['episode_index']} "
-                            f"success={summary['success']} frames={summary['num_samples']} "
-                            f"valid={summary['valid']}",
-                            flush=True,
-                        )
+                        if outcome == "success" and recorder.episode_frames >= recorder.min_frames:
+                            summary = recorder.finish_episode(success=True, outcome=outcome)
+                            finished_episodes.append(summary)
+                            print(
+                                f"LWH_RECORD_EPISODE_FINISHED index={summary['episode_index']} "
+                                f"success={summary['success']} frames={summary['num_samples']} "
+                                f"valid={summary['valid']}",
+                                flush=True,
+                            )
+                        else:
+                            reason = "too_few_frames" if outcome == "success" else outcome
+                            discarded = recorder.discard_episode(reason=reason)
+                            if discarded is not None:
+                                print(
+                                    f"LWH_RECORD_EPISODE_DISCARDED index={discarded['episode_index']} "
+                                    f"frames={discarded['num_samples']} reason={discarded['reason']}",
+                                    flush=True,
+                                )
                     env.reset()
                     teleop.reset()
                     pending_reset = None
@@ -883,21 +915,23 @@ def main() -> None:
                     render_during_wait = True
                 else:
                     observations, _, _, _, _ = env.step(action)
-                    policy_observation = observations["policy"]
-                    timestamp_s = time.perf_counter() - recorder._episode_started_at
-                    recorder.append_frame(
-                        policy_observation=policy_observation,
-                        action=action,
-                        env=env,
-                        timestamp_s=timestamp_s,
-                    )
-                    control_steps += 1
-                    if recorder.episode_frames == 1 or recorder.episode_frames % 60 == 0:
-                        print(
-                            f"LWH_RECORD_FRAME episode={recorder.episode_index} "
-                            f"frame={recorder.episode_frames}",
-                            flush=True,
+                    # B 之前也要让仿真跟随真实 leader，但这些同步帧不属于任何 episode。
+                    if recorder.is_recording:
+                        policy_observation = observations["policy"]
+                        timestamp_s = time.perf_counter() - recorder._episode_started_at
+                        recorder.append_frame(
+                            policy_observation=policy_observation,
+                            action=action,
+                            env=env,
+                            timestamp_s=timestamp_s,
                         )
+                        control_steps += 1
+                        if recorder.episode_frames == 1 or recorder.episode_frames % 60 == 0:
+                            print(
+                                f"LWH_RECORD_FRAME episode={recorder.episode_index} "
+                                f"frame={recorder.episode_frames}",
+                                flush=True,
+                            )
 
             rate_limiter.sleep(env, render_during_wait=render_during_wait)
 

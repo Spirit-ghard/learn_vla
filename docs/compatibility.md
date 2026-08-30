@@ -36,6 +36,13 @@ LeRobot: 0.5.1
 LeRobot source commit: 2ea20910
 ```
 
+异步推理接口按 Hugging Face LeRobot 官方 `v0.5.1`
+（commit `1396b9fab7aecddd10006c33c47a487ffdcb54b4`）的
+`lerobot.async_inference` 和 `lerobot.transport.services.proto` 实现。本机可编辑安装
+仍位于 `/home/a/lerobot_05`，并已安装 `grpcio 1.73.1`、`protobuf 6.31.1`。
+Isaac Python 保持 `protobuf 4.25.9`，项目内 transport 文件由同一官方 `.proto`
+生成，避免在 Isaac 进程导入 Python 3.12 的 LeRobot 包。
+
 本机 `--image_format video` 可写出 LeRobotDataset v3 video 数据集；默认读取时
 `torchcodec` 因 FFmpeg 动态库链路失败而报错，显式 `video_backend="pyav"` 可以读取。
 因此转换脚本默认使用 `--image_format image`，保证当前训练环境可直接加载。

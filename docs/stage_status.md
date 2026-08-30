@@ -411,24 +411,31 @@ docs/stage4_validation.md
 
 ## Stage 6：远程推理
 
-状态：未开始。
+状态：异步 client/server 已实现，本机端到端验证通过；远程网络链路待部署时验证。
 
 目标：
 
-- IsaacLab Policy Client：发送 observation，接收 action，执行 env.step。
-- LeRobot Policy Server：加载 checkpoint，observation -> policy -> action。
+- IsaacLab Policy Client：发送 observation，异步接收 action chunk，本地队列持续执行 `env.step`。
+- LeRobot Policy Server：复用官方 `PolicyServer` 加载 checkpoint，`observation -> action chunk`。
 
-需要定义：
+当前协议：
 
-- observation/action schema
-- 图像编码方式
-- timeout
-- action horizon
-- timestamp
-- reset 协议
-- server 断开时的安全行为
+- observation 为 6D joint state 加 `front+wrist` 两路 `480x640 RGB uint8`。
+- action chunk 为带 timestamp/timestep 的 `N x 6` joint position。
+- 默认 `actions_per_chunk=30`、`chunk_size_threshold=0.5`、`policy_hz=30`。
+- 使用 LeRobot 官方 gRPC service、2 MiB observation 分块和重叠 chunk 聚合规则。
+- reset 清空本地 action queue，并通过官方 `Ready` 清空服务端观测状态，不重复加载模型。
+- 服务断开时先保持最后一个关节目标；连续三次 observation 发送失败后安全退出仿真。
 
-注意：
+验证：
 
-- 这一阶段才引入 client/server 通信。
-- 不使用真实机器人。
+- ACT checkpoint 单次观测可返回 30 个有限的 6D action。
+- 队列消费到 50% 后可接收重叠 chunk，并得到连续 timestep。
+- IsaacLab 双相机 headless 实际运行 120 step，通过 60 Hz physics / 30 Hz policy 配置消费 action queue。
+- 不使用真实机器人；远程部署建议使用 SSH 隧道，不把 pickle gRPC 服务直接暴露到公网。
+
+记录：
+
+```text
+docs/async_inference.md
+```

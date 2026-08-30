@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import MISSING
+import math
 from typing import Any
 
 import isaaclab.sim as sim_utils
@@ -18,17 +19,40 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg, OffsetCfg, TiledCameraCfg
 from isaaclab.utils import configclass
-import isaaclab.utils.math as math_utils
 
 from lwh_isaaclab_tasks.assets import SO101_FOLLOWER_CFG, SO101_JOINT_NAMES
 from lwh_isaaclab_tasks.devices.so101_leader import normalized_positions_to_sim_radians
 
 from . import mdp
 
-# overview 相机位置
-overview_eye = (0.80, 0.08, 1.00)
-# overview 相机注视点
-overview_target = (0.32, -0.34, 0.06)
+# wrist 相机位姿 以wrist为parent
+wrist_camera_pos = (-0.0177, 0.0662, -0.01376)
+wrist_camera_rot_xyz_deg = (-41.74, -10.242, 3.54)
+
+# front 相机位姿(手外眼) 以base为parent
+front_camera_pos = (0.0, -0.30289, 0.67961)
+front_camera_rot_xyz_deg = (0.0, 0.0, 0.0)
+
+# overview 相机位姿
+overview_camera_pos = (0.13108, -0.89468, 0.64109)
+overview_camera_rot_xyz_deg = (44.18174, 0.0, -12.69987)
+
+# 相机画面宽度
+camera_width = 640
+# 相机画面高度
+camera_height = 480
+# 相机采集周期
+camera_update_period = 1 / 30.0
+
+# 机器人初始关节位置（rad）
+robot_initial_joint_pos = {
+    "shoulder_pan": 0.0,
+    "shoulder_lift": 0.0,
+    "elbow_flex": 0.0,
+    "wrist_flex": 0.0,
+    "wrist_roll": 0.0,
+    "gripper": 0.0,
+}
 
 # 可抓取棍子初始位置
 object_init_pos = (0.18, -0.34, 0.062)
@@ -55,15 +79,49 @@ placement_box_pad_thickness = 0.002
 table_top_z = 0.04
 
 
-def look_at_quat(eye: tuple[float, float, float], target: tuple[float, float, float]) -> tuple[float, float, float, float]:
-    """计算从 eye 看向 target 的相机四元数（opengl convention）。"""
-    rotation = math_utils.create_rotation_matrix_from_view(
-        torch.tensor([eye], dtype=torch.float32),
-        torch.tensor([target], dtype=torch.float32),
-        up_axis="Z",
+def quat_from_euler_xyz_deg(rot_xyz_deg: tuple[float, float, float]) -> tuple[float, float, float, float]:
+    """把 UI 里的 XYZ 欧拉角转换为四元数。"""
+    roll, pitch, yaw = (math.radians(value) for value in rot_xyz_deg)
+    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+    return (
+        cy * cp * cr + sy * sp * sr,
+        cy * cp * sr - sy * sp * cr,
+        sy * cp * sr + cy * sp * cr,
+        sy * cp * cr - cy * sp * sr,
     )
-    quat = math_utils.quat_from_matrix(rotation).squeeze(0)
-    return tuple(float(value) for value in quat.tolist())
+
+
+def rotate_vector_by_quat(
+    quat: tuple[float, float, float, float],
+    vector: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """用四元数旋转向量。"""
+    w, x, y, z = quat
+    q_vec = (x, y, z)
+
+    def cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
+
+    first_cross = cross(q_vec, vector)
+    t = tuple(2.0 * value for value in first_cross)
+    second_cross = cross(q_vec, t)
+    return tuple(vector[index] + w * t[index] + second_cross[index] for index in range(3))
+
+
+def camera_target_from_euler_xyz_deg(
+    pos: tuple[float, float, float],
+    rot_xyz_deg: tuple[float, float, float],
+    distance: float = 1.0,
+) -> tuple[float, float, float]:
+    """根据 UI 相机姿态计算主窗口注视点。"""
+    forward = rotate_vector_by_quat(quat_from_euler_xyz_deg(rot_xyz_deg), (0.0, 0.0, -1.0))
+    return tuple(pos[index] + distance * forward[index] for index in range(3))
 
 
 def placement_box_part_cfg(
@@ -109,9 +167,9 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
     wrist: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/gripper/wrist_camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(-0.001, 0.1, -0.04),
-            rot=(-0.704022, -0.065999, 0.646586, -0.286221),
-            convention="ros",
+            pos=wrist_camera_pos,
+            rot=quat_from_euler_xyz_deg(wrist_camera_rot_xyz_deg),
+            convention="opengl",
         ),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
@@ -121,17 +179,17 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
             clipping_range=(0.01, 50.0),
             lock_camera=True,
         ),
-        width=640,
-        height=480,
-        update_period=1 / 30.0,
+        width=camera_width,
+        height=camera_height,
+        update_period=camera_update_period,
     )
 
     front: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base/front_camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.0, -0.5, 0.6),
-            rot=(0.1650476, -0.9862856, 0.0, 0.0),
-            convention="ros",
+            pos=front_camera_pos,
+            rot=quat_from_euler_xyz_deg(front_camera_rot_xyz_deg),
+            convention="opengl",
         ),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
@@ -141,16 +199,16 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
             clipping_range=(0.01, 50.0),
             lock_camera=True,
         ),
-        width=640,
-        height=480,
-        update_period=1 / 30.0,
+        width=camera_width,
+        height=camera_height,
+        update_period=camera_update_period,
     )
 
     overview: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/overview_camera",
         offset=TiledCameraCfg.OffsetCfg(
-            pos=overview_eye,
-            rot=look_at_quat(overview_eye, overview_target),
+            pos=overview_camera_pos,
+            rot=quat_from_euler_xyz_deg(overview_camera_rot_xyz_deg),
             convention="opengl",
         ),
         data_types=["rgb"],
@@ -161,9 +219,9 @@ class LwhSO101TableSceneCfg(InteractiveSceneCfg):
             clipping_range=(0.01, 50.0),
             lock_camera=True,
         ),
-        width=640,
-        height=480,
-        update_period=1 / 30.0,
+        width=camera_width,
+        height=camera_height,
+        update_period=camera_update_period,
     )
 
     ground = AssetBaseCfg(
@@ -295,7 +353,7 @@ class LwhSO101ActionsCfg:
 class LwhSO101EventCfg:
     """默认 reset 行为：恢复场景并随机化可抓取物体位置。"""
 
-    reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
+    reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset", params={"reset_joint_targets": True})
     randomize_object_xy = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
@@ -379,8 +437,10 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
 
         self.decimation = 1
         self.episode_length_s = 25.0
-        self.viewer.eye = (-0.4, -0.6, 0.5)
-        self.viewer.lookat = (0.9, 0.0, -0.3)
+        self.viewer.origin_type = "env"
+        self.viewer.env_index = 0
+        self.viewer.eye = overview_camera_pos
+        self.viewer.lookat = camera_target_from_euler_xyz_deg(overview_camera_pos, overview_camera_rot_xyz_deg)
 
         self.sim.dt = 1 / 60.0
         self.sim.render_interval = 1
@@ -391,7 +451,8 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.ee_frame.visualizer_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
 
         # 机器人、桌面、可抓取物体和放置框的位置在同一个任务配置内显式定义。
-        self.scene.robot.init_state.pos = (0.35, -0.64, 0.01)
+        self.scene.robot.init_state.pos = (0.35, -0.55, 0.01)
+        self.scene.robot.init_state.joint_pos = robot_initial_joint_pos
         self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SO101_JOINT_NAMES]
 
     def use_teleop_device(self, teleop_device: str) -> None:
@@ -404,11 +465,13 @@ class LwhSO101TableEnvCfg(ManagerBasedRLEnvCfg):
                 asset_name="robot",
                 joint_names=["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"],
                 scale=1.0,
+                use_default_offset=False,
             )
             self.actions.gripper_action = mdp.JointPositionActionCfg(
                 asset_name="robot",
                 joint_names=["gripper"],
                 scale=1.0,
+                use_default_offset=False,
             )
             self.scene.robot.spawn.rigid_props.disable_gravity = True
             return

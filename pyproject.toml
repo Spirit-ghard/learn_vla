@@ -21,4 +21,5 @@ lwh_isaaclab_tasks = [
     "assets/robots/*.usd",
     "assets/props/*.usd",
     "assets/props/Materials/Textures/*.png",
+    "policy/transport/*.proto",
 ]

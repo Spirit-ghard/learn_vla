@@ -43,8 +43,9 @@ def parse_args() -> argparse.Namespace:
         "--camera_keys",
         default=None,
         help=(
-            "Comma-separated camera keys to convert. Defaults to HDF5 training_camera_keys, "
-            "normally front,wrist. Pass overview explicitly only for debugging."
+            "Comma-separated camera keys to convert. Defaults to HDF5 training_camera_keys; "
+            "standard dual/triple recordings use front,wrist. overview is never included "
+            "unless explicitly requested."
         ),
     )
     parser.add_argument(

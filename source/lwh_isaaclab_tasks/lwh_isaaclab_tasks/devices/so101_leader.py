@@ -262,17 +262,15 @@ class SO101LeaderArm:
         self._reset_state = False
 
     def advance(self):
-        """Return a 6D simulated joint-position action after B starts the leader control."""
+        """持续读取 leader；B 只切换 episode 控制状态，不触发首次位置跳变。"""
         if self._reset_state:
             self._reset_state = False
             return {"reset": True, "started": self._started, self.device_type: True}
-        if not self._started:
-            return None
 
         self._latest_normalized_positions = self.bus.read_normalized_positions()
         action = {
             "reset": False,
-            "started": True,
+            "started": self._started,
             self.device_type: True,
             "joint_state": self._latest_normalized_positions,
         }
@@ -283,8 +281,8 @@ class SO101LeaderArm:
             "\n".join(
                 [
                     "Teleoperation Controls for SO101 real leader",
-                    "  Move the SO101 Leader arm to control the simulated SO101 Follower",
-                    "  B: start leader control",
+                    "  Leader position is synchronized to simulation immediately",
+                    "  B: start a control/recording episode",
                     "  R: reset simulation and mark failure",
                     "  N: reset simulation and mark success",
                     "  Ctrl+C: quit",

@@ -329,6 +329,25 @@
 - follower 标定只有用户明确运行 `--arm follower --calibrate` 时才会连接真实 follower；仿真入口仍不控制真实 follower。
 - leader/follower 标定均应在 LeRobot Python 环境中执行，不在 IsaacSim 进程中 import LeRobot。
 
+## 2026-08-30：Stage 6 使用 LeRobot 官方异步 action chunk
+
+决策：
+
+- 服务端复用 LeRobot `PolicyServer`，使用官方 gRPC service 和 action chunk 推理。
+- IsaacLab 客户端复用官方 queue threshold、timestep 对齐和重叠 chunk 聚合逻辑。
+- 默认 60 Hz physics、30 Hz policy action、`30` actions/chunk、`0.5` queue threshold。
+
+原因：
+
+- 同步 HTTP 版本在仿真主线程等待单步 action，推理和网络延迟会直接降低控制频率。
+- LeRobot 0.5.1 要求 Python 3.12，Isaac Sim 4.5 使用 Python 3.10，不能在同一进程加载完整 LeRobot。
+
+影响：
+
+- 服务端运行在独立 LeRobot 环境，IsaacLab 进程不 import LeRobot，也不控制真实 follower。
+- Isaac 客户端只保留官方 protobuf 的兼容生成代码和仿真环境适配。
+- `overview` 不进入策略请求，训练与推理输入固定为 `state + front + wrist`。
+
 ## 术语说明：Wall loop Hz 和 Control segment Hz
 
 `Wall loop Hz`：

@@ -38,13 +38,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--teleop_device",
-        default="keyboard",
+        default="so101leader",
         choices=["keyboard", "so101leader"],
         help="Teleoperation input device. so101leader reads a real leader arm and only drives simulation.",
     )
     parser.add_argument(
         "--camera_mode",
-        default="front",
+        default="dual",
         choices=["front", "dual", "triple"],
         help=(
             "Camera set for simulation observations. front uses only front; dual uses front+wrist; "
@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=DEFAULT_RECORD_OUTPUT,
-        help="HDF5 output path used with --record.",
+        help="HDF5 output path used with --record. Existing files auto-increment to _01/_02 unless --overwrite or --append is used.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Delete an existing HDF5 file before --record.")
     parser.add_argument("--append", action="store_true", help="Append episodes to an existing HDF5 file with --record.")
@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--leader_start_immediately",
         action="store_true",
-        help="Start SO101 leader control immediately instead of waiting for B.",
+        help="Mark the first episode active immediately; leader position sync is always immediate.",
     )
     parser.add_argument(
         "--leader_keep_torque",
@@ -146,23 +146,51 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def launch_record_hdf5_entry() -> None:
+def cli_has_option(argv: list[str], option: str) -> bool:
+    """检查原始命令行是否已经传入某个参数。"""
+    return any(arg == option or arg.startswith(f"{option}=") for arg in argv)
+
+
+def append_record_option_if_missing(command: list[str], argv: list[str], option: str, value: object | None) -> None:
+    """把 teleop 默认值显式转发给录制入口。"""
+    if value is None or cli_has_option(argv, option):
+        return
+    command.extend([option, str(value)])
+
+
+def launch_record_hdf5_entry(args: argparse.Namespace) -> None:
     """让 `teleop.py --record` 成为正式入口，同时复用阶段三的 HDF5 录制流程。"""
     record_script = PROJECT_ROOT / "scripts" / "record_hdf5.py"
     if not record_script.is_file():
         raise FileNotFoundError(f"Cannot find HDF5 recorder entry: {record_script}")
     command = [sys.executable, str(record_script)]
-    for arg in sys.argv[1:]:
+    original_argv = sys.argv[1:]
+    for arg in original_argv:
         if arg == "--record":
             continue
         command.append(arg)
+    append_record_option_if_missing(command, original_argv, "--task", args.task)
+    append_record_option_if_missing(command, original_argv, "--num_envs", args.num_envs)
+    append_record_option_if_missing(command, original_argv, "--teleop_device", args.teleop_device)
+    append_record_option_if_missing(command, original_argv, "--camera_mode", args.camera_mode)
+    append_record_option_if_missing(command, original_argv, "--ground_mode", args.ground_mode)
+    append_record_option_if_missing(command, original_argv, "--teleop_render_interval", args.teleop_render_interval)
+    append_record_option_if_missing(command, original_argv, "--teleop_antialiasing_mode", args.teleop_antialiasing_mode)
+    append_record_option_if_missing(command, original_argv, "--teleop_rendering_mode", args.teleop_rendering_mode)
+    append_record_option_if_missing(command, original_argv, "--output", args.output)
+    append_record_option_if_missing(command, original_argv, "--compression", args.compression)
+    append_record_option_if_missing(command, original_argv, "--chunk_size", args.chunk_size)
+    append_record_option_if_missing(command, original_argv, "--min_frames", args.min_frames)
+    append_record_option_if_missing(command, original_argv, "--leader_port", args.leader_port)
+    append_record_option_if_missing(command, original_argv, "--leader_calibration", args.leader_calibration)
+    append_record_option_if_missing(command, original_argv, "--leader_id", args.leader_id)
     print(f"LWH_TELEOP_RECORD_ENTRY {' '.join(command)}", flush=True)
     os.execv(sys.executable, command)
 
 
 args_cli = parse_args()
 if args_cli.record:
-    launch_record_hdf5_entry()
+    launch_record_hdf5_entry(args_cli)
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
