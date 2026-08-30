@@ -253,6 +253,7 @@ class ManagedSshTunnel:
         self.remote_port = remote_port
         self.connect_timeout_s = connect_timeout_s
         self.process: subprocess.Popen | None = None
+        self.process_group = bool(password)
 
     def start(self) -> None:
         if shutil.which("ssh") is None:
@@ -298,7 +299,7 @@ class ManagedSshTunnel:
         )
         try:
             # 自动密码模式不依赖当前终端，Ctrl+C 由客户端统一回收隧道。
-            self.process = subprocess.Popen(command, start_new_session=bool(self.password))
+            self.process = subprocess.Popen(command, start_new_session=self.process_group)
             deadline = time.perf_counter() + self.connect_timeout_s
             while time.perf_counter() < deadline:
                 return_code = self.process.poll()
@@ -321,11 +322,17 @@ class ManagedSshTunnel:
     def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:
             return
-        self.process.terminate()
+        if self.process_group:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        else:
+            self.process.terminate()
         try:
             self.process.wait(timeout=3.0)
         except subprocess.TimeoutExpired:
-            self.process.kill()
+            if self.process_group:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            else:
+                self.process.kill()
             self.process.wait(timeout=1.0)
         print("[远程连接] SSH 隧道已关闭", flush=True)
 

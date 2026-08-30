@@ -1,4 +1,14 @@
-"""远程策略服务器配置示例。"""
+"""
+远程策略服务器配置示例。
+
+服务器实例变化时必须检查：host、port、password。
+模型或服务器目录变化时才修改：policy_path、server_python、server_script。
+通常不需要修改：user、local_port、remote_port、policy_device、server_fps。
+
+启动顺序：
+1. 本机终端一运行 python3 scripts/start_remote_policy_server.py。
+2. 本机终端二运行 python3 scripts/run_policy_client.py。
+"""
 
 # 是否默认启用远程推理
 enabled = False
