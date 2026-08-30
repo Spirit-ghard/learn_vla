@@ -15,7 +15,7 @@ python3 scripts/start_remote_policy_server.py
 远程连接配置保存在本机文件：
 
 ```text
-configs/remote_policy_server.json
+configs/remote_policy_server_config.py
 ```
 
 该文件已经填写当前服务器的 IP、SSH 端口、密码、PolicyServer 路径和 checkpoint 路径。
@@ -115,7 +115,7 @@ python3 scripts/run_policy_client.py \
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--task` | `Lwh-SO101-Table-v0` | 要运行的 IsaacLab Gym task id。 |
-| `--remote_config` | `configs/remote_policy_server.json` | 远程服务器、密码和 checkpoint 配置文件。 |
+| `--remote_config` | `configs/remote_policy_server_config.py` | 远程服务器、密码和 checkpoint 配置文件。 |
 | `--local_policy_server` | 关闭 | 忽略远程配置，直接连接 `--server_address`。 |
 | `--server_address` | `127.0.0.1:8080` | PolicyServer 地址，格式必须是 `HOST:PORT`，不能填写 `http://`。 |
 | `--ssh_host` | 未设置 | SSH 服务器 IP；设置后由客户端自动建立隧道，并忽略 `--server_address`。 |
@@ -158,7 +158,7 @@ render_interval=2
 客户端通过 SSH 本地端口转发访问服务器回环地址。隧道由 `run_policy_client.py` 自动
 创建和回收，不要把使用 pickle 序列化的 gRPC 服务直接暴露到公网。
 
-远程模式需要修改的内容都在 `configs/remote_policy_server.json`：
+远程模式需要修改的内容都在 `configs/remote_policy_server_config.py`：
 
 ```text
 host           服务器 IP

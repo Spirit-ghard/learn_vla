@@ -74,7 +74,7 @@ PolicyServer 在服务器的 LeRobot 环境运行，IsaacLab client 留在本机
 - 启动时先预填首个 action chunk，再开始策略控制。
 - 5 秒未收到 chunk 时允许重试；队列为空时保持上一关节目标。
 
-客户端默认读取 `configs/remote_policy_server.json`，使用其中的 SSH 密码自动认证并启动
+客户端默认读取 `configs/remote_policy_server_config.py`，使用其中的 SSH 密码自动认证并启动
 `ssh -N` 子进程；退出客户端时隧道会一并关闭，不需要第三个终端。示例：
 
 ```bash
@@ -88,7 +88,7 @@ python3 scripts/start_remote_policy_server.py
 ```
 
 真实密码配置已加入 `.gitignore`；仓库只提交字段示例
-`configs/remote_policy_server.example.json`。本机 PolicyServer 模式增加
+`configs/remote_policy_server_config.example.py`。本机 PolicyServer 模式增加
 `--local_policy_server` 以忽略默认远程配置。
 
 客户端加载完成后等待按 B，收到首个 action chunk 才开始控制。R/N 会停止推理、清空
@@ -103,7 +103,7 @@ python3 scripts/start_remote_policy_server.py
 | `--chunk_size_threshold` | `0.65` | 队列剩余比例低于该值时发送新观测。 |
 | `--ssh_host` | 未设置 | 设置后自动建立 SSH 隧道。 |
 | `--ssh_port` | `22` | 云平台映射的 SSH 端口。 |
-| `--remote_config` | `configs/remote_policy_server.json` | SSH 密码、端口和服务器 checkpoint 配置。 |
+| `--remote_config` | `configs/remote_policy_server_config.py` | SSH 密码、端口和服务器 checkpoint 配置。 |
 | `--local_policy_server` | 关闭 | 忽略 SSH 配置，直接使用 `--server_address`。 |
 | `--aggregate_fn_name` | `weighted_average` | 按官方规则融合重叠 timestep 的动作。 |
 | `--policy_hz` | `30` | 本地 action queue 的消费频率，需与训练数据 FPS 一致。 |

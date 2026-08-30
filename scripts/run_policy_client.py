@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import runpy
 import shutil
 import signal
 import socket
@@ -23,18 +23,16 @@ from isaac_runtime import ensure_isaac_runtime
 project_root = Path(__file__).resolve().parents[1]
 default_policy_path = project_root / "checkpoints/act_so101_table_030000"
 default_task_description = "Move the rod into the placement tray."
-default_remote_config_path = project_root / "configs/remote_policy_server.json"
+default_remote_config_path = project_root / "configs/remote_policy_server_config.py"
 
 
 def load_remote_config(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        config = runpy.run_path(str(path))
+    except (OSError, SyntaxError) as exc:
         raise RuntimeError(f"无法读取远程策略配置 {path}：{exc}") from exc
-    if not isinstance(config, dict):
-        raise TypeError(f"远程策略配置必须是 JSON 对象：{path}")
     if config.get("password"):
         path.chmod(0o600)
     return config

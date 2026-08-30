@@ -17,7 +17,7 @@ checkpoints/
 logs/
 
 # 远程服务器密码仅保存在本机，不提交到 Git。
-configs/remote_policy_server.json
+configs/remote_policy_server_config.py
 
 # 文档附件中的安装程序应从官网下载，避免把大型二进制发行包提交到仓库。
 *.exe

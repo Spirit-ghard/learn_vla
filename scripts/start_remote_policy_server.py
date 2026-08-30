@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import runpy
 import shutil
 import signal
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 project_root = Path(__file__).resolve().parents[1]
-default_config_path = project_root / "configs/remote_policy_server.json"
+default_config_path = project_root / "configs/remote_policy_server_config.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,11 +30,9 @@ def parse_args() -> argparse.Namespace:
 
 def load_config(path: Path) -> dict:
     try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        config = runpy.run_path(str(path))
+    except (OSError, SyntaxError) as exc:
         raise RuntimeError(f"无法读取远程服务器配置 {path}：{exc}") from exc
-    if not isinstance(config, dict):
-        raise TypeError(f"远程服务器配置必须是 JSON 对象：{path}")
     required_fields = (
         "host",
         "port",
