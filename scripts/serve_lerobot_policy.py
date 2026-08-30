@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run LeRobot's official asynchronous PolicyServer for the IsaacLab client."""
+"""为 IsaacLab 客户端运行 LeRobot 官方异步策略服务。"""
 
 from __future__ import annotations
 
@@ -12,30 +12,32 @@ from pathlib import Path
 from typing import Iterator
 
 import grpc
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve LeRobot asynchronous policy inference over gRPC.")
-    parser.add_argument("--host", default="127.0.0.1", help="Server bind address.")
-    parser.add_argument("--port", type=int, default=8080, help="Server port.")
-    parser.add_argument("--fps", type=int, default=30, help="Policy action frequency used for chunk timestamps.")
+    parser = argparse.ArgumentParser(description="通过 gRPC 提供 LeRobot 异步策略推理。")
+    parser.add_argument("--host", default="127.0.0.1", help="服务监听地址。")
+    parser.add_argument("--port", type=int, default=8080, help="服务端口。")
+    parser.add_argument("--fps", type=int, default=30, help="动作块时间戳使用的策略频率。")
     parser.add_argument(
         "--inference_latency",
         type=float,
         default=0.0,
-        help="Optional minimum server inference period in seconds.",
+        help="可选的最小推理周期，单位为秒。",
     )
     parser.add_argument(
         "--obs_queue_timeout",
         type=float,
         default=2.0,
-        help="Seconds GetActions waits for a new observation.",
+        help="GetActions 等待新观测的时间，单位为秒。",
     )
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
-        parser.error("--port must be between 1 and 65535.")
+        parser.error("--port 必须在 1 到 65535 之间。")
     if args.fps <= 0:
-        parser.error("--fps must be positive.")
+        parser.error("--fps 必须为正数。")
     if args.inference_latency < 0 or args.obs_queue_timeout < 0:
-        parser.error("latency and timeout values cannot be negative.")
+        parser.error("延迟和超时时间不能为负数。")
     return args
 
 
@@ -55,12 +57,12 @@ def receive_bytes_in_chunks(request_iterator: Iterator) -> bytes:
             buffer.write(item.data)
             return buffer.getvalue()
         else:
-            raise ValueError(f"Unknown observation transfer state: {item.transfer_state}")
-    raise ValueError("Observation stream ended before TRANSFER_END.")
+            raise ValueError(f"未知的观测传输状态：{item.transfer_state}")
+    raise ValueError("观测流在 TRANSFER_END 之前结束。")
 
 
 class IsaacLabPolicyServerAdapter:
-    """Factory that keeps LeRobot policy execution intact and adapts only wire payloads."""
+    """保持 LeRobot 策略执行不变，只适配网络传输数据。"""
 
     @staticmethod
     def create(config):
@@ -78,7 +80,7 @@ class IsaacLabPolicyServerAdapter:
             def SendPolicyInstructions(self, request, context):  # noqa: N802
                 wire_config = pickle.loads(request.data)  # nosec B301: trusted client only.
                 if not isinstance(wire_config, dict):
-                    context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Policy setup must be a dictionary.")
+                    context.abort(grpc.StatusCode.INVALID_ARGUMENT, "策略配置必须是字典。")
                 official_config = RemotePolicyConfig(**wire_config)
                 official_request = services_pb2.PolicySetup(
                     data=pickle.dumps(official_config, protocol=pickle.HIGHEST_PROTOCOL)
@@ -99,7 +101,7 @@ class IsaacLabPolicyServerAdapter:
                 official_iterator = send_bytes_in_chunks(
                     payload,
                     services_pb2.Observation,
-                    log_prefix="[ISAAC CLIENT] Observation",
+                    log_prefix="[Isaac 客户端] 观测",
                     silent=True,
                 )
                 return super().SendObservations(official_iterator, context)
@@ -142,27 +144,27 @@ def main() -> None:
     services_pb2_grpc.add_AsyncInferenceServicer_to_server(policy_server, server)
     bound_port = server.add_insecure_port(f"{config.host}:{config.port}")
     if bound_port == 0:
-        raise RuntimeError(f"Failed to bind gRPC server to {config.host}:{config.port}.")
+        raise RuntimeError(f"无法将 gRPC 服务绑定到 {config.host}:{config.port}。")
 
     print(
-        f"LWH_ASYNC_POLICY_SERVER_READY host={config.host} port={bound_port} "
-        f"fps={config.fps} lerobot_protocol=official",
+        f"[策略服务端] 已启动：监听地址={config.host} 端口={bound_port} "
+        f"策略频率={config.fps}Hz 协议=LeRobot官方异步协议",
         flush=True,
     )
     server.start()
     try:
         server.wait_for_termination()
     except KeyboardInterrupt:
-        print("\nLWH_ASYNC_POLICY_SERVER_STOP_REQUESTED", flush=True)
+        print("\n[策略服务端] 收到停止请求", flush=True)
     finally:
         policy_server.stop()
         server.stop(grace=1.0).wait(timeout=2.0)
-        print("LWH_ASYNC_POLICY_SERVER_STOPPED", flush=True)
+        print("[策略服务端] 已停止", flush=True)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(f"LWH_ASYNC_POLICY_SERVER_FAILED: {exc}", file=sys.stderr, flush=True)
+        print(f"[策略服务端] 启动失败：{exc}", file=sys.stderr, flush=True)
         raise

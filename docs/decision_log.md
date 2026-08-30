@@ -356,6 +356,8 @@
 - PolicyServer 保持只监听服务器 `127.0.0.1`，不直接开放公网端口。
 - 客户端连接并加载模型后等待 B；R/N 清空两端队列、重置仿真并停止策略。
 - reset 时间之前发出的 action chunk 即使稍后到达，也会按 observation timestamp 丢弃。
+- 远程地址、端口、密码和 checkpoint 使用本机 `configs/remote_policy_server.json` 管理；
+  真实配置不进入 Git，仓库只保留无密码示例。
 
 原因：
 

@@ -98,13 +98,13 @@ class IsaacLabAsyncPolicyClient:
         image_shape: tuple[int, int, int],
     ) -> None:
         if not 0.0 <= chunk_size_threshold <= 1.0:
-            raise ValueError("chunk_size_threshold must be between 0 and 1.")
+            raise ValueError("chunk_size_threshold 必须在 0 到 1 之间。")
         if actions_per_chunk < 1:
-            raise ValueError("actions_per_chunk must be positive.")
+            raise ValueError("actions_per_chunk 必须为正数。")
         if aggregate_fn_name not in aggregate_functions:
             raise ValueError(
-                f"Unknown aggregate function {aggregate_fn_name!r}; "
-                f"choose from {sorted(aggregate_functions)}."
+                f"未知的动作融合方式 {aggregate_fn_name!r}；"
+                f"可选值为 {sorted(aggregate_functions)}。"
             )
 
         self.server_address = server_address
@@ -240,7 +240,7 @@ class IsaacLabAsyncPolicyClient:
             if time.perf_counter() - self.chunk_request_started_at <= self.timeout_s:
                 return False
             self.chunk_request_pending.clear()
-            self.last_error = f"Action chunk request exceeded {self.timeout_s:.1f}s; retrying."
+            self.last_error = f"动作块请求超过 {self.timeout_s:.1f} 秒，正在重试。"
         if self.action_chunk_size < 1:
             return self.sent_observations == 0
         with self.action_queue_lock:
@@ -378,12 +378,12 @@ class IsaacLabAsyncPolicyClient:
 
     def parse_actions(self, payload: Any) -> list[TimedAction]:
         if not isinstance(payload, list):
-            raise TypeError(f"Expected an action list, got {type(payload).__name__}.")
+            raise TypeError(f"服务端应返回动作列表，实际为 {type(payload).__name__}。")
         actions: list[TimedAction] = []
         for item in payload:
             action = torch.as_tensor(np.asarray(item["action"], dtype=np.float32))
             if action.shape != (self.action_dim,) or not bool(torch.isfinite(action).all()):
-                raise ValueError(f"Invalid policy action shape/value: {action}.")
+                raise ValueError(f"策略动作形状或数值无效：{action}。")
             actions.append(
                 TimedAction(
                     timestamp=float(item["timestamp"]),

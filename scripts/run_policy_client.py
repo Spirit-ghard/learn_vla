@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Evaluate a LeRobot policy asynchronously in the IsaacLab SO101 task."""
+"""在 IsaacLab SO101 任务中异步评估 LeRobot 策略。"""
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 import traceback
 import weakref
@@ -20,115 +23,159 @@ from isaac_runtime import ensure_isaac_runtime
 project_root = Path(__file__).resolve().parents[1]
 default_policy_path = project_root / "checkpoints/act_so101_table_030000"
 default_task_description = "Move the rod into the placement tray."
+default_remote_config_path = project_root / "configs/remote_policy_server.json"
+
+
+def load_remote_config(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取远程策略配置 {path}：{exc}") from exc
+    if not isinstance(config, dict):
+        raise TypeError(f"远程策略配置必须是 JSON 对象：{path}")
+    if config.get("password"):
+        path.chmod(0o600)
+    return config
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run official-style LeRobot async inference in IsaacLab.")
-    parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="Registered Gym task id.")
-    parser.add_argument("--num_envs", type=int, default=1, help="Number of simulated environments.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--remote_config", default=str(default_remote_config_path))
+    config_args, _ = config_parser.parse_known_args()
+    remote_config_path = Path(config_args.remote_config).expanduser().resolve()
+    remote_config = load_remote_config(remote_config_path)
+    remote_enabled = bool(remote_config.get("enabled", False))
+
+    parser = argparse.ArgumentParser(description="在 IsaacLab 中运行 LeRobot 异步策略推理。")
+    parser.add_argument(
+        "--remote_config",
+        default=str(remote_config_path),
+        help="远程 SSH 和策略服务端配置文件。",
+    )
+    parser.add_argument(
+        "--local_policy_server",
+        action="store_true",
+        help="忽略远程 SSH 配置，直接连接 --server_address。",
+    )
+    parser.add_argument("--task", default="Lwh-SO101-Table-v0", help="已注册的 Gym 任务 ID。")
+    parser.add_argument("--num_envs", type=int, default=1, help="并行仿真环境数量。")
     parser.add_argument(
         "--server_address",
         default="127.0.0.1:8080",
-        help="LeRobot async gRPC server as HOST:PORT.",
+        help="LeRobot 异步 gRPC 服务地址，格式为 HOST:PORT。",
     )
     parser.add_argument(
         "--ssh_host",
-        default=None,
-        help="SSH server host. Setting this enables the managed SSH tunnel.",
+        default=remote_config.get("host") if remote_enabled else None,
+        help="SSH 服务器地址；设置后启用自动管理的 SSH 隧道。",
     )
-    parser.add_argument("--ssh_port", type=int, default=22, help="SSH server port.")
-    parser.add_argument("--ssh_user", default="root", help="SSH server user.")
+    parser.add_argument(
+        "--ssh_port", type=int, default=remote_config.get("port", 22), help="SSH 服务器端口。"
+    )
+    parser.add_argument(
+        "--ssh_user", default=remote_config.get("user", "root"), help="SSH 登录用户。"
+    )
     parser.add_argument(
         "--ssh_local_port",
         type=int,
-        default=18080,
-        help="Local port used by the managed SSH tunnel.",
+        default=remote_config.get("local_port", 18080),
+        help="SSH 隧道使用的本地端口。",
     )
     parser.add_argument(
         "--ssh_remote_port",
         type=int,
-        default=8080,
-        help="PolicyServer port on the SSH server loopback interface.",
+        default=remote_config.get("remote_port", 8080),
+        help="服务器回环地址上的策略服务端口。",
     )
     parser.add_argument(
         "--ssh_connect_timeout_s",
         type=float,
         default=60.0,
-        help="Maximum time allowed for SSH authentication and port forwarding.",
+        help="SSH 认证和端口转发的最长等待时间。",
     )
     parser.add_argument(
         "--policy_path",
-        default=str(default_policy_path),
-        help="Checkpoint path visible to the policy server, or a Hugging Face repo id.",
+        default=remote_config.get("policy_path", str(default_policy_path)),
+        help="策略服务端可访问的 checkpoint 路径或 Hugging Face 仓库 ID。",
     )
-    parser.add_argument("--policy_type", default="act", help="LeRobot policy type.")
-    parser.add_argument("--policy_device", default="cuda", help="Inference device on the server.")
+    parser.add_argument("--policy_type", default="act", help="LeRobot 策略类型。")
+    parser.add_argument(
+        "--policy_device",
+        default=remote_config.get("policy_device", "cuda"),
+        help="服务端执行推理的设备。",
+    )
     parser.add_argument(
         "--actions_per_chunk",
         type=int,
         default=60,
-        help="Actions returned per inference request. 60 is two seconds at 30 Hz.",
+        help="每次推理返回的动作数；60 个动作对应 30 Hz 下约 2 秒。",
     )
     parser.add_argument(
         "--chunk_size_threshold",
         type=float,
         default=0.65,
-        help="Request a fresh chunk when the local queue falls below this ratio.",
+        help="本地动作队列低于该比例时请求新的动作块。",
     )
     parser.add_argument(
         "--aggregate_fn_name",
         default="weighted_average",
         choices=["weighted_average", "latest_only", "average", "conservative"],
-        help="How overlapping action chunks are merged.",
+        help="重叠动作块的融合方式。",
     )
-    parser.add_argument("--policy_hz", type=float, default=30.0, help="Action queue consumption frequency.")
-    parser.add_argument("--timeout_s", type=float, default=5.0, help="gRPC request timeout.")
+    parser.add_argument("--policy_hz", type=float, default=30.0, help="动作队列消费频率。")
+    parser.add_argument("--timeout_s", type=float, default=5.0, help="gRPC 请求超时时间。")
     parser.add_argument(
         "--camera_mode",
         default="dual",
         choices=["dual", "triple"],
-        help="Policy always uses front+wrist; triple also keeps overview for inspection.",
+        help="策略固定使用 front+wrist；triple 额外保留 overview 供观察。",
     )
     parser.add_argument(
         "--ground_mode",
         default="off",
         choices=["off", "on"],
-        help="Ground plane mode. off matches the teleoperation performance profile.",
+        help="地面启用模式；off 与遥操作性能配置一致。",
     )
     parser.add_argument(
         "--render_interval",
         type=int,
         default=2,
-        help="Physics steps per camera/render update.",
+        help="每次相机和渲染更新对应的物理步数。",
     )
     parser.add_argument(
         "--max_action_delta",
         type=float,
         default=0.05,
-        help="Maximum target change per new policy action in radians; 0 disables it.",
+        help="每个新策略动作允许的最大目标变化，单位为弧度；0 表示关闭限制。",
     )
-    parser.add_argument("--task_description", default=default_task_description, help="Task text sent to policy.")
-    parser.add_argument("--max_steps", type=int, default=0, help="Stop after N simulation steps; 0 runs continuously.")
-    parser.add_argument("--log_interval", type=int, default=60, help="Status log interval in simulation steps.")
+    parser.add_argument("--task_description", default=default_task_description, help="发送给策略的任务文本。")
+    parser.add_argument("--max_steps", type=int, default=0, help="运行 N 个仿真步后停止；0 表示持续运行。")
+    parser.add_argument("--log_interval", type=int, default=60, help="状态日志间隔，单位为仿真步。")
 
     from isaaclab.app import AppLauncher
 
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    args.ssh_password = remote_config.get("password") if remote_enabled else None
+    if args.local_policy_server:
+        args.ssh_host = None
+        args.ssh_password = None
     if args.num_envs != 1:
-        parser.error("The async policy client supports --num_envs 1 only.")
+        parser.error("异步策略客户端目前只支持 --num_envs 1。")
     if args.actions_per_chunk < 1 or args.policy_hz <= 0 or args.timeout_s <= 0:
-        parser.error("chunk size, policy frequency and timeout must be positive.")
+        parser.error("动作块大小、策略频率和超时时间必须为正数。")
     if not 0.0 <= args.chunk_size_threshold <= 1.0:
-        parser.error("--chunk_size_threshold must be between 0 and 1.")
+        parser.error("--chunk_size_threshold 必须在 0 到 1 之间。")
     if args.render_interval < 1 or args.max_steps < 0:
-        parser.error("render_interval must be positive and max_steps cannot be negative.")
+        parser.error("render_interval 必须为正数，max_steps 不能为负数。")
     if not 1 <= args.ssh_port <= 65535 or not 1 <= args.ssh_local_port <= 65535:
-        parser.error("SSH ports must be between 1 and 65535.")
+        parser.error("SSH 端口必须在 1 到 65535 之间。")
     if not 1 <= args.ssh_remote_port <= 65535 or args.ssh_connect_timeout_s <= 0:
-        parser.error("SSH remote port and connect timeout must be positive.")
+        parser.error("SSH 远程端口和连接超时时间必须为正数。")
     if "://" in args.server_address:
-        parser.error("--server_address uses HOST:PORT, not an HTTP URL.")
+        parser.error("--server_address 应使用 HOST:PORT，不能填写 HTTP URL。")
     args.enable_cameras = True
     return args
 
@@ -195,6 +242,7 @@ class ManagedSshTunnel:
         host: str,
         port: int,
         user: str,
+        password: str | None,
         local_port: int,
         remote_port: int,
         connect_timeout_s: float,
@@ -202,6 +250,7 @@ class ManagedSshTunnel:
         self.host = host
         self.port = port
         self.user = user
+        self.password = password
         self.local_port = local_port
         self.remote_port = remote_port
         self.connect_timeout_s = connect_timeout_s
@@ -209,14 +258,15 @@ class ManagedSshTunnel:
 
     def start(self) -> None:
         if shutil.which("ssh") is None:
-            raise RuntimeError("Cannot find the ssh executable in PATH.")
+            raise RuntimeError("系统 PATH 中找不到 ssh 命令。")
+        if self.password and shutil.which("sshpass") is None:
+            raise RuntimeError("自动密码认证需要安装 sshpass。")
         if port_is_open("127.0.0.1", self.local_port):
             raise RuntimeError(
-                f"Local port {self.local_port} is already in use. "
-                "Stop the old tunnel or choose --ssh_local_port."
+                f"本地端口 {self.local_port} 已被占用。请关闭旧隧道，或修改配置中的 local_port。"
             )
 
-        command = [
+        ssh_command = [
             "ssh",
             "-N",
             "-p",
@@ -233,26 +283,42 @@ class ManagedSshTunnel:
             f"{self.local_port}:127.0.0.1:{self.remote_port}",
             f"{self.user}@{self.host}",
         ]
+        password_path: str | None = None
+        if self.password:
+            password_fd, password_path = tempfile.mkstemp(prefix="lwh_ssh_", text=True)
+            os.fchmod(password_fd, 0o600)
+            with os.fdopen(password_fd, "w", encoding="utf-8") as password_file:
+                password_file.write(self.password)
+                password_file.write("\n")
+            command = ["sshpass", "-f", password_path, *ssh_command]
+        else:
+            command = ssh_command
         print(
-            f"LWH_SSH_TUNNEL_CONNECT destination={self.user}@{self.host}:{self.port} "
-            f"local_port={self.local_port} remote_port={self.remote_port}",
+            f"[远程连接] 正在建立 SSH 隧道：服务器={self.user}@{self.host}:{self.port} "
+            f"本地端口={self.local_port} 服务端口={self.remote_port}",
             flush=True,
         )
-        # 继承当前终端，OpenSSH 才能直接读取用户输入的密码。
-        self.process = subprocess.Popen(command)
-        deadline = time.perf_counter() + self.connect_timeout_s
-        while time.perf_counter() < deadline:
-            return_code = self.process.poll()
-            if return_code is not None:
-                raise RuntimeError(f"SSH tunnel exited before becoming ready (code {return_code}).")
-            if port_is_open("127.0.0.1", self.local_port):
-                print(f"LWH_SSH_TUNNEL_READY local_port={self.local_port}", flush=True)
-                return
-            time.sleep(0.1)
-        self.stop()
-        raise TimeoutError(
-            f"SSH tunnel did not become ready within {self.connect_timeout_s:.1f}s."
-        )
+        try:
+            # 自动密码模式不依赖当前终端，Ctrl+C 由客户端统一回收隧道。
+            self.process = subprocess.Popen(command, start_new_session=bool(self.password))
+            deadline = time.perf_counter() + self.connect_timeout_s
+            while time.perf_counter() < deadline:
+                return_code = self.process.poll()
+                if return_code is not None:
+                    raise RuntimeError(
+                        f"SSH 隧道尚未就绪便退出，返回码为 {return_code}。"
+                    )
+                if port_is_open("127.0.0.1", self.local_port):
+                    print(f"[远程连接] SSH 隧道已建立：本地端口={self.local_port}", flush=True)
+                    return
+                time.sleep(0.1)
+            self.stop()
+            raise TimeoutError(
+                f"SSH 隧道在 {self.connect_timeout_s:.1f} 秒内未能建立。"
+            )
+        finally:
+            if password_path is not None:
+                Path(password_path).unlink(missing_ok=True)
 
     def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:
@@ -263,7 +329,7 @@ class ManagedSshTunnel:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait(timeout=1.0)
-        print("LWH_SSH_TUNNEL_STOPPED", flush=True)
+        print("[远程连接] SSH 隧道已关闭", flush=True)
 
 
 class PolicyKeyboard:
@@ -303,20 +369,20 @@ class PolicyKeyboard:
             self.start_requested = True
         elif key_name == "R":
             self.start_requested = False
-            self.reset_reason = "failure"
+            self.reset_reason = "失败"
         elif key_name == "N":
             self.start_requested = False
-            self.reset_reason = "success"
+            self.reset_reason = "成功"
 
     def display_controls(self) -> None:
         print(
             "\n".join(
                 [
-                    "Policy Controls",
-                    "  B: start policy inference",
-                    "  R: stop inference and reset (failure)",
-                    "  N: stop inference and reset (success)",
-                    "  Ctrl+C: quit",
+                    "策略控制按键",
+                    "  B：开始策略推理",
+                    "  R：停止推理并重置（失败）",
+                    "  N：停止推理并重置（成功）",
+                    "  Ctrl+C：退出",
                 ]
             ),
             flush=True,
@@ -367,7 +433,7 @@ def tensor_action(
 ) -> torch.Tensor:
     action = action.reshape(1, -1).to(device=device, dtype=torch.float32)
     if action.shape != (1, len(SO101_JOINT_NAMES)):
-        raise ValueError(f"Expected action shape (1, 6), got {tuple(action.shape)}.")
+        raise ValueError(f"策略动作应为 (1, 6)，实际为 {tuple(action.shape)}。")
     if max_delta > 0:
         action = previous_action + torch.clamp(
             action - previous_action,
@@ -391,7 +457,7 @@ def main() -> None:
     def handle_sigint(_signum, _frame) -> None:
         nonlocal interrupted
         interrupted = True
-        print("\nLWH_ASYNC_POLICY_CLIENT_STOP_REQUESTED", flush=True)
+        print("\n[策略客户端] 收到退出请求", flush=True)
 
     previous_sigint_handler = signal.signal(signal.SIGINT, handle_sigint)
     control_steps = 0
@@ -405,6 +471,7 @@ def main() -> None:
                 host=args_cli.ssh_host,
                 port=args_cli.ssh_port,
                 user=args_cli.ssh_user,
+                password=args_cli.ssh_password,
                 local_port=args_cli.ssh_local_port,
                 remote_port=args_cli.ssh_remote_port,
                 connect_timeout_s=args_cli.ssh_connect_timeout_s,
@@ -437,7 +504,7 @@ def main() -> None:
             joint_names=list(SO101_JOINT_NAMES),
             image_shape=tuple(front.shape),
         )
-        print("LWH_ASYNC_POLICY_CLIENT_LOADING_POLICY", flush=True)
+        print("[策略客户端] 正在加载策略模型", flush=True)
         client.start()
 
         control_hz = 1.0 / env.step_dt
@@ -456,11 +523,11 @@ def main() -> None:
         episode_steps = 0
         episode_started_at = time.perf_counter()
         print(
-            f"LWH_ASYNC_POLICY_CLIENT_WAITING_FOR_B task={args_cli.task} "
-            f"server={server_address} control_hz={control_hz:.1f} "
-            f"policy_hz={effective_policy_hz:.1f} actions_per_chunk={args_cli.actions_per_chunk} "
-            f"chunk_size_threshold={args_cli.chunk_size_threshold:.2f} camera_mode={args_cli.camera_mode} "
-            "real_robot_access=False",
+            f"[策略客户端] 已就绪，等待按 B 开始：任务={args_cli.task} "
+            f"服务地址={server_address} 控制频率={control_hz:.1f}Hz "
+            f"策略频率={effective_policy_hz:.1f}Hz 每块动作数={args_cli.actions_per_chunk} "
+            f"预取阈值={args_cli.chunk_size_threshold:.2f} 相机模式={args_cli.camera_mode} "
+            "真实机器人访问=关闭",
             flush=True,
         )
 
@@ -478,8 +545,8 @@ def main() -> None:
                 start_pending = False
                 episode_steps = 0
                 print(
-                    f"LWH_ASYNC_POLICY_CLIENT_RESET result={reset_reason} "
-                    f"steps={control_steps} waiting_for_b=True",
+                    f"[策略客户端] 场景已重置：结果={reset_reason} "
+                    f"累计步数={control_steps}，等待再次按 B",
                     flush=True,
                 )
 
@@ -491,25 +558,25 @@ def main() -> None:
                 )
                 first_chunk_deadline = time.perf_counter() + max(args_cli.timeout_s, 10.0)
                 start_pending = True
-                print("LWH_ASYNC_POLICY_CLIENT_PREPARING", flush=True)
+                print("[策略客户端] 已发送观测，正在等待首个动作块", flush=True)
 
             if not policy_active:
                 if start_pending and client.received_chunks >= expected_chunk_count:
                     if client.queue_size() < 1:
-                        raise RuntimeError("PolicyServer returned an empty action chunk.")
+                        raise RuntimeError("策略服务端返回了空动作块。")
                     policy_active = True
                     start_pending = False
                     episode_steps = 0
                     episode_started_at = time.perf_counter()
                     rate_limiter.reset()
                     print(
-                        f"LWH_ASYNC_POLICY_CLIENT_STARTED initial_queue={client.queue_size()}",
+                        f"[策略客户端] 策略已开始：初始队列={client.queue_size()}",
                         flush=True,
                     )
                 elif start_pending and time.perf_counter() >= first_chunk_deadline:
                     raise TimeoutError(
-                        "Timed out waiting for the first action chunk from PolicyServer: "
-                        f"{client.last_error or 'no server error'}"
+                        "等待策略服务端首个动作块超时："
+                        f"{client.last_error or '服务端未返回明确错误'}"
                     )
                 else:
                     env.sim.render()
@@ -536,7 +603,7 @@ def main() -> None:
                     send_failures = 0 if sent else send_failures + 1
                     if send_failures >= 3:
                         raise RuntimeError(
-                            f"Policy server failed three observation requests: {client.last_error}"
+                            f"策略服务端连续三次观测请求失败：{client.last_error}"
                         )
 
             step_result = env.step(last_action)
@@ -552,14 +619,14 @@ def main() -> None:
                 )
                 latency = client.latency_metrics()
                 print(
-                    f"LWH_ASYNC_POLICY_CLIENT_STEP steps={control_steps} "
-                    f"wall_hz={wall_hz:.1f} "
-                    f"chunks={client.received_chunks} queue={client.queue_size()} "
-                    f"observations={client.sent_observations} dropped={client.dropped_observations} "
-                    f"upload_ms={latency['latest_upload_ms']:.1f} "
-                    f"chunk_latency_ms={latency['latest_chunk_latency_ms']:.1f} "
-                    f"underflows={queue_underflows} "
-                    f"last_error={client.last_error or 'none'}",
+                    f"[策略客户端] 运行状态：步数={control_steps} "
+                    f"实际循环={wall_hz:.1f}Hz "
+                    f"动作块={client.received_chunks} 队列={client.queue_size()} "
+                    f"已发观测={client.sent_observations} 丢弃观测={client.dropped_observations} "
+                    f"上传延迟={latency['latest_upload_ms']:.1f}ms "
+                    f"动作延迟={latency['latest_chunk_latency_ms']:.1f}ms "
+                    f"队列欠载={queue_underflows} "
+                    f"最近错误={client.last_error or '无'}",
                     flush=True,
                 )
 
@@ -571,8 +638,7 @@ def main() -> None:
                 start_pending = False
                 episode_steps = 0
                 print(
-                    f"LWH_ASYNC_POLICY_CLIENT_RESET result=environment_done "
-                    f"steps={control_steps} waiting_for_b=True",
+                    f"[策略客户端] 环境结束并已重置：累计步数={control_steps}，等待再次按 B",
                     flush=True,
                 )
 
@@ -590,14 +656,14 @@ def main() -> None:
 
     latency = client.latency_metrics() if client is not None else {}
     print(
-        f"LWH_ASYNC_POLICY_CLIENT_STOPPED steps={control_steps} "
-        f"chunks={client.received_chunks if client else 0} underflows={queue_underflows} "
-        f"upload_ms_avg={latency.get('average_upload_ms', 0.0):.1f} "
-        f"upload_ms_min={latency.get('minimum_upload_ms', 0.0):.1f} "
-        f"upload_ms_max={latency.get('maximum_upload_ms', 0.0):.1f} "
-        f"chunk_latency_ms_avg={latency.get('average_chunk_latency_ms', 0.0):.1f} "
-        f"chunk_latency_ms_min={latency.get('minimum_chunk_latency_ms', 0.0):.1f} "
-        f"chunk_latency_ms_max={latency.get('maximum_chunk_latency_ms', 0.0):.1f}",
+        f"[策略客户端] 已停止：步数={control_steps} "
+        f"动作块={client.received_chunks if client else 0} 队列欠载={queue_underflows} "
+        f"平均上传延迟={latency.get('average_upload_ms', 0.0):.1f}ms "
+        f"最小上传延迟={latency.get('minimum_upload_ms', 0.0):.1f}ms "
+        f"最大上传延迟={latency.get('maximum_upload_ms', 0.0):.1f}ms "
+        f"平均动作延迟={latency.get('average_chunk_latency_ms', 0.0):.1f}ms "
+        f"最小动作延迟={latency.get('minimum_chunk_latency_ms', 0.0):.1f}ms "
+        f"最大动作延迟={latency.get('maximum_chunk_latency_ms', 0.0):.1f}ms",
         flush=True,
     )
 

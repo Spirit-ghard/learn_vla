@@ -2,36 +2,36 @@
 
 ## 远程服务器推理（推荐）
 
-终端一登录服务器并启动 Policy Server：
+终端一在本机运行远程服务启动器。它会读取配置中的 SSH 密码，在服务器上启动 Policy
+Server，并把服务器日志显示在当前终端：
 
 ```bash
-ssh -p 31361 root@183.147.142.40
-
-cd /root/gpufree-data/lwh_policy_server
-/root/lerobot/.venv/bin/python serve_lerobot_policy.py \
-  --host 127.0.0.1 \
-  --port 8080 \
-  --fps 30
+cd /home/a/lwh_code/lwh_robot_learning
+python3 scripts/start_remote_policy_server.py
 ```
 
-看到 `LWH_ASYNC_POLICY_SERVER_READY` 后保持终端运行。
+看到 `[策略服务端] 已启动` 后保持终端运行。
 
-终端二在本机启动 Isaac Sim。客户端会自动建立和回收 SSH 隧道，不再需要单独的隧道终端：
+远程连接配置保存在本机文件：
+
+```text
+configs/remote_policy_server.json
+```
+
+该文件已经填写当前服务器的 IP、SSH 端口、密码、PolicyServer 路径和 checkpoint 路径。
+服务器实例发生变化时直接修改其中的 `host`、`port` 和 `password`。配置文件权限会自动
+设为 `600`，并已加入 `.gitignore`，不会推送到远端仓库。
+
+终端二在本机启动 Isaac Sim。客户端会读取配置并自动认证、建立和回收 SSH 隧道：
 
 ```bash
 conda activate isaac
 cd /home/a/lwh_code/lwh_robot_learning
 
-python3 scripts/run_policy_client.py \
-  --task Lwh-SO101-Table-v0 \
-  --ssh_host 183.147.142.40 \
-  --ssh_port 31361 \
-  --policy_path /root/gpufree-data/lwh_lerobot_data/runs/act_video_b32_50k_20260823_184025/checkpoints/030000/pretrained_model \
-  --policy_device cuda
+python3 scripts/run_policy_client.py
 ```
 
-按终端提示输入 SSH 密码。出现 `LWH_ASYNC_POLICY_CLIENT_WAITING_FOR_B` 后操作 Isaac Sim
-窗口：
+出现 `[策略客户端] 已就绪，等待按 B 开始` 后操作 Isaac Sim 窗口：
 
 ```text
 B：发送当前观测，收到首个 action chunk 后开始执行策略
@@ -64,6 +64,7 @@ conda activate isaac
 cd /home/a/lwh_code/lwh_robot_learning
 
 python3 scripts/run_policy_client.py \
+  --local_policy_server \
   --task Lwh-SO101-Table-v0 \
   --server_address 127.0.0.1:8080 \
   --policy_path checkpoints/act_so101_table_030000 \
@@ -114,6 +115,8 @@ python3 scripts/run_policy_client.py \
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--task` | `Lwh-SO101-Table-v0` | 要运行的 IsaacLab Gym task id。 |
+| `--remote_config` | `configs/remote_policy_server.json` | 远程服务器、密码和 checkpoint 配置文件。 |
+| `--local_policy_server` | 关闭 | 忽略远程配置，直接连接 `--server_address`。 |
 | `--server_address` | `127.0.0.1:8080` | PolicyServer 地址，格式必须是 `HOST:PORT`，不能填写 `http://`。 |
 | `--ssh_host` | 未设置 | SSH 服务器 IP；设置后由客户端自动建立隧道，并忽略 `--server_address`。 |
 | `--ssh_port` | `22` | SSH 映射端口；云平台重建实例后通常只需修改这一项。 |
@@ -155,13 +158,13 @@ render_interval=2
 客户端通过 SSH 本地端口转发访问服务器回环地址。隧道由 `run_policy_client.py` 自动
 创建和回收，不要把使用 pickle 序列化的 gRPC 服务直接暴露到公网。
 
-远程模式需要修改的主要参数只有：
+远程模式需要修改的内容都在 `configs/remote_policy_server.json`：
 
 ```text
---policy_path      改为服务器上的 checkpoint 绝对路径
---policy_device    使用服务器 GPU 时设置为 cuda
---ssh_host         服务器 IP
---ssh_port         云平台当前映射的 SSH 端口
+host           服务器 IP
+port           云平台当前映射的 SSH 端口
+password       SSH 密码
+policy_path    服务器上的 checkpoint 绝对路径
 ```
 
 无论本机还是远程模式，客户端只发送：

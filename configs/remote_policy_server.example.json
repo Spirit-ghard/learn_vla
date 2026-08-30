@@ -1,0 +1,29 @@
+{
+  "_说明": "服务器实例变化时，通常只需要修改 host、port 和 password。",
+  "_字段说明": {
+    "enabled": "是否默认启用远程推理",
+    "host": "服务器 IP 地址",
+    "port": "云平台映射的 SSH 端口",
+    "user": "SSH 登录用户",
+    "password": "SSH 登录密码",
+    "local_port": "本机 SSH 隧道端口",
+    "remote_port": "服务器上的策略服务端口",
+    "policy_path": "服务器上的模型 checkpoint 路径",
+    "policy_device": "服务器推理设备",
+    "server_python": "服务器上的 LeRobot Python 路径",
+    "server_script": "服务器上的策略服务脚本路径",
+    "server_fps": "策略服务动作频率"
+  },
+  "enabled": false,
+  "host": "服务器IP",
+  "port": 22,
+  "user": "root",
+  "password": "服务器密码",
+  "local_port": 18080,
+  "remote_port": 8080,
+  "policy_path": "/path/to/pretrained_model",
+  "policy_device": "cuda",
+  "server_python": "/path/to/lerobot/python",
+  "server_script": "/path/to/serve_lerobot_policy.py",
+  "server_fps": 30
+}
