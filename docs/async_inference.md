@@ -66,21 +66,30 @@ PolicyServer 在服务器的 LeRobot 环境运行，IsaacLab client 留在本机
 端口转发连接，不直接把使用 pickle 的官方 gRPC 服务暴露到公网。客户端的
 `--policy_path` 必须填写服务器进程能够访问的 checkpoint 路径。
 
-连接建立后，客户端仍使用 `--server_address 127.0.0.1:8080` 访问本地转发端口。
+公网双相机上传明显慢于局域网，因此项目适配层还会：
+
+- 使用独立线程上传 observation，不阻塞 `env.step()`。
+- 同一时刻只保留一条在途 observation，避免旧图像积压。
+- 队列达到预取阈值时将请求标记为 `must_go`，绕过相似观测过滤。
+- 启动时先预填首个 action chunk，再开始策略控制。
+- 5 秒未收到 chunk 时允许重试；队列为空时保持上一关节目标。
+
+连接建立后，客户端使用 `--server_address 127.0.0.1:18080` 访问本地转发端口。
 网络中断或 action queue 暂时为空时，仿真保持上一关节目标，不会访问真实机器人。
 
 ## 关键参数
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `--actions_per_chunk` | `30` | 每次推理返回的动作数；ACT checkpoint 最大为 `100`。 |
-| `--chunk_size_threshold` | `0.5` | 队列剩余比例低于该值时发送新观测。 |
+| `--actions_per_chunk` | `30` | 每次推理返回的动作数；公网部署实测推荐 `60`，ACT checkpoint 最大为 `100`。 |
+| `--chunk_size_threshold` | `0.5` | 队列剩余比例低于该值时发送新观测；公网部署实测推荐 `0.65`。 |
 | `--aggregate_fn_name` | `weighted_average` | 按官方规则融合重叠 timestep 的动作。 |
 | `--policy_hz` | `30` | 本地 action queue 的消费频率，需与训练数据 FPS 一致。 |
 | `--render_interval` | `2` | 60 Hz physics 下每两步更新一次相机，即约 30 Hz。 |
 | `--timeout_s` | `5` | gRPC 请求超时。 |
 
-当前数据和 ACT checkpoint 都是 `30 FPS`。建议先使用
-`actions_per_chunk=30, chunk_size_threshold=0.5`；这代表约 1 秒动作范围，并在队列
-剩余约 0.5 秒时请求下一段。`overview` 只用于人工观察，策略始终只发送
+当前数据和 ACT checkpoint 都是 `30 FPS`。本机低延迟连接可从
+`actions_per_chunk=30, chunk_size_threshold=0.5` 开始；当前公网服务器实测应使用
+`actions_per_chunk=60, chunk_size_threshold=0.65`，即约 2 秒动作范围，并在队列
+剩余约 1.3 秒时请求下一段。`overview` 只用于人工观察，策略始终只发送
 `observation.state + front + wrist`。

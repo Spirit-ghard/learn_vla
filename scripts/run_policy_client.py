@@ -242,6 +242,19 @@ def main() -> None:
         client.start()
 
         last_action = hold_current_joint_action(observations, env.device)
+        client.send_observation(raw_policy_observation(observations, args_cli.task_description))
+        first_chunk_deadline = time.perf_counter() + max(args_cli.timeout_s, 10.0)
+        while client.received_chunks == 0 and simulation_app.is_running() and not interrupted:
+            if client.last_error is not None:
+                raise RuntimeError(f"Policy server failed before the first action chunk: {client.last_error}")
+            if time.perf_counter() >= first_chunk_deadline:
+                raise TimeoutError("Timed out waiting for the first action chunk from PolicyServer.")
+            env.sim.render()
+            time.sleep(0.01)
+
+        if interrupted or not simulation_app.is_running():
+            return
+
         control_hz = 1.0 / env.step_dt
         if args_cli.policy_hz > control_hz:
             raise ValueError(f"policy_hz {args_cli.policy_hz} exceeds simulation control_hz {control_hz}.")
@@ -253,7 +266,7 @@ def main() -> None:
             f"LWH_ASYNC_POLICY_CLIENT_READY task={args_cli.task} control_hz={control_hz:.1f} "
             f"policy_hz={effective_policy_hz:.1f} actions_per_chunk={args_cli.actions_per_chunk} "
             f"chunk_size_threshold={args_cli.chunk_size_threshold:.2f} camera_mode={args_cli.camera_mode} "
-            f"real_robot_access=False",
+            f"initial_queue={client.queue_size()} real_robot_access=False",
             flush=True,
         )
 
@@ -291,11 +304,15 @@ def main() -> None:
 
             if args_cli.log_interval and control_steps % args_cli.log_interval == 0:
                 wall_hz = control_steps / max(time.perf_counter() - loop_started_at, 1.0e-6)
+                latency = client.latency_metrics()
                 print(
                     f"LWH_ASYNC_POLICY_CLIENT_STEP steps={control_steps} "
                     f"wall_hz={wall_hz:.1f} "
                     f"chunks={client.received_chunks} queue={client.queue_size()} "
-                    f"observations={client.sent_observations} underflows={queue_underflows} "
+                    f"observations={client.sent_observations} dropped={client.dropped_observations} "
+                    f"upload_ms={latency['latest_upload_ms']:.1f} "
+                    f"chunk_latency_ms={latency['latest_chunk_latency_ms']:.1f} "
+                    f"underflows={queue_underflows} "
                     f"last_error={client.last_error or 'none'}",
                     flush=True,
                 )
@@ -313,9 +330,16 @@ def main() -> None:
             client.stop()
         env.close()
 
+    latency = client.latency_metrics() if client is not None else {}
     print(
         f"LWH_ASYNC_POLICY_CLIENT_STOPPED steps={control_steps} "
-        f"chunks={client.received_chunks if client else 0}",
+        f"chunks={client.received_chunks if client else 0} underflows={queue_underflows} "
+        f"upload_ms_avg={latency.get('average_upload_ms', 0.0):.1f} "
+        f"upload_ms_min={latency.get('minimum_upload_ms', 0.0):.1f} "
+        f"upload_ms_max={latency.get('maximum_upload_ms', 0.0):.1f} "
+        f"chunk_latency_ms_avg={latency.get('average_chunk_latency_ms', 0.0):.1f} "
+        f"chunk_latency_ms_min={latency.get('minimum_chunk_latency_ms', 0.0):.1f} "
+        f"chunk_latency_ms_max={latency.get('maximum_chunk_latency_ms', 0.0):.1f}",
         flush=True,
     )
 

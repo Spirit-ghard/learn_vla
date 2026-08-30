@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from queue import Queue
+from queue import Empty, Full, Queue
 from typing import Any
 
 import grpc
@@ -122,9 +122,26 @@ class IsaacLabAsyncPolicyClient:
         self.must_go.set()
         self.shutdown_event = threading.Event()
         self.receiver_thread: threading.Thread | None = None
+        self.sender_thread: threading.Thread | None = None
+        self.observation_queue: Queue[dict[str, Any]] = Queue(maxsize=1)
+        self.sender_busy = threading.Event()
+        self.observation_pending = threading.Event()
+        self.chunk_request_pending = threading.Event()
+        self.chunk_request_started_at = 0.0
         self.received_chunks = 0
+        self.queued_observations = 0
         self.sent_observations = 0
+        self.dropped_observations = 0
         self.last_error: str | None = None
+        self.metrics_lock = threading.Lock()
+        self.latest_upload_ms = 0.0
+        self.total_upload_ms = 0.0
+        self.minimum_upload_ms = float("inf")
+        self.maximum_upload_ms = 0.0
+        self.latest_chunk_latency_ms = 0.0
+        self.total_chunk_latency_ms = 0.0
+        self.minimum_chunk_latency_ms = float("inf")
+        self.maximum_chunk_latency_ms = 0.0
 
         lerobot_features = {
             "observation.state": {
@@ -176,11 +193,19 @@ class IsaacLabAsyncPolicyClient:
             name="lerobot-action-receiver",
             daemon=True,
         )
+        self.sender_thread = threading.Thread(
+            target=self.send_observations,
+            name="lerobot-observation-sender",
+            daemon=True,
+        )
         self.receiver_thread.start()
+        self.sender_thread.start()
 
     def stop(self) -> None:
         self.shutdown_event.set()
         self.channel.close()
+        if self.sender_thread is not None:
+            self.sender_thread.join(timeout=2.0)
         if self.receiver_thread is not None:
             self.receiver_thread.join(timeout=2.0)
 
@@ -190,7 +215,14 @@ class IsaacLabAsyncPolicyClient:
             self.action_queue = Queue()
         with self.latest_action_lock:
             self.latest_action = -1
+        while True:
+            try:
+                self.observation_queue.get_nowait()
+            except Empty:
+                break
         self.action_chunk_size = -1
+        self.observation_pending.clear()
+        self.chunk_request_pending.clear()
         self.must_go.set()
         self.stub.Ready(services_pb2.Empty(), timeout=self.timeout_s)
 
@@ -200,14 +232,24 @@ class IsaacLabAsyncPolicyClient:
 
     def ready_to_send_observation(self) -> bool:
         """队列降到官方阈值后请求下一段 action chunk。"""
+        if self.observation_pending.is_set():
+            return False
+        if self.chunk_request_pending.is_set():
+            if time.perf_counter() - self.chunk_request_started_at <= self.timeout_s:
+                return False
+            self.chunk_request_pending.clear()
+            self.last_error = f"Action chunk request exceeded {self.timeout_s:.1f}s; retrying."
+        if self.action_chunk_size < 1:
+            return self.sent_observations == 0
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self.chunk_size_threshold
 
     def send_observation(self, raw_observation: dict[str, Any]) -> bool:
+        """将最新观测交给独立上传线程，避免公网传输阻塞仿真循环。"""
         with self.latest_action_lock:
             latest_action = self.latest_action
-        with self.action_queue_lock:
-            must_go = self.must_go.is_set() and self.action_queue.empty()
+        # 公网延迟可能长于剩余动作时域，预取请求必须绕过服务端的相似观测过滤。
+        must_go = self.must_go.is_set()
 
         timed_observation = {
             "timestamp": time.time(),
@@ -215,17 +257,54 @@ class IsaacLabAsyncPolicyClient:
             "must_go": must_go,
             "observation": raw_observation,
         }
-        payload = pickle.dumps(timed_observation, protocol=pickle.HIGHEST_PROTOCOL)
-        try:
-            self.stub.SendObservations(send_bytes_in_chunks(payload), timeout=self.timeout_s)
-        except grpc.RpcError as exc:
-            self.last_error = f"{exc.code().name}: {exc.details()}"
-            return False
+        self.observation_pending.set()
+        self.chunk_request_pending.set()
+        self.chunk_request_started_at = time.perf_counter()
 
-        self.sent_observations += 1
+        try:
+            self.observation_queue.put_nowait(timed_observation)
+        except Full:
+            try:
+                self.observation_queue.get_nowait()
+            except Empty:
+                pass
+            self.observation_queue.put_nowait(timed_observation)
+            self.dropped_observations += 1
+
+        self.queued_observations += 1
         if must_go:
             self.must_go.clear()
         return True
+
+    def send_observations(self) -> None:
+        """后台上传观测；积压时只发送最新一帧。"""
+        while self.running:
+            try:
+                timed_observation = self.observation_queue.get(timeout=0.1)
+            except Empty:
+                continue
+
+            self.sender_busy.set()
+            upload_started = time.perf_counter()
+            try:
+                payload = pickle.dumps(timed_observation, protocol=pickle.HIGHEST_PROTOCOL)
+                self.stub.SendObservations(send_bytes_in_chunks(payload), timeout=self.timeout_s)
+                upload_ms = (time.perf_counter() - upload_started) * 1000.0
+                with self.metrics_lock:
+                    self.latest_upload_ms = upload_ms
+                    self.total_upload_ms += upload_ms
+                    self.minimum_upload_ms = min(self.minimum_upload_ms, upload_ms)
+                    self.maximum_upload_ms = max(self.maximum_upload_ms, upload_ms)
+                self.sent_observations += 1
+                self.last_error = None
+            except grpc.RpcError as exc:
+                self.last_error = f"{exc.code().name}: {exc.details()}"
+                self.chunk_request_pending.clear()
+                if timed_observation["must_go"]:
+                    self.must_go.set()
+            finally:
+                self.sender_busy.clear()
+                self.observation_pending.clear()
 
     def receive_actions(self) -> None:
         """独立线程持续等待服务端 chunk，模型推理不会阻塞 IsaacLab 主循环。"""
@@ -239,10 +318,25 @@ class IsaacLabAsyncPolicyClient:
                     continue
                 payload = pickle.loads(response.data)  # nosec B301: trusted policy server only.
                 incoming_actions = self.parse_actions(payload)
+                if incoming_actions:
+                    chunk_latency_ms = max(
+                        0.0,
+                        (time.time() - incoming_actions[0].timestamp) * 1000.0,
+                    )
+                    with self.metrics_lock:
+                        self.latest_chunk_latency_ms = chunk_latency_ms
+                        self.total_chunk_latency_ms += chunk_latency_ms
+                        self.minimum_chunk_latency_ms = min(
+                            self.minimum_chunk_latency_ms, chunk_latency_ms
+                        )
+                        self.maximum_chunk_latency_ms = max(
+                            self.maximum_chunk_latency_ms, chunk_latency_ms
+                        )
                 self.aggregate_action_queues(incoming_actions)
                 self.action_chunk_size = max(self.action_chunk_size, len(incoming_actions))
                 self.received_chunks += 1
                 self.last_error = None
+                self.chunk_request_pending.clear()
                 self.must_go.set()
             except grpc.RpcError as exc:
                 if not self.running:
@@ -254,6 +348,24 @@ class IsaacLabAsyncPolicyClient:
             except (KeyError, TypeError, ValueError, pickle.UnpicklingError) as exc:
                 self.last_error = str(exc)
                 time.sleep(0.1)
+
+    def latency_metrics(self) -> dict[str, float]:
+        """返回远程传输和 action chunk 的累计延迟指标。"""
+        with self.metrics_lock:
+            upload_count = max(self.sent_observations, 1)
+            chunk_count = max(self.received_chunks, 1)
+            return {
+                "latest_upload_ms": self.latest_upload_ms,
+                "average_upload_ms": self.total_upload_ms / upload_count,
+                "minimum_upload_ms": 0.0 if self.sent_observations == 0 else self.minimum_upload_ms,
+                "maximum_upload_ms": self.maximum_upload_ms,
+                "latest_chunk_latency_ms": self.latest_chunk_latency_ms,
+                "average_chunk_latency_ms": self.total_chunk_latency_ms / chunk_count,
+                "minimum_chunk_latency_ms": (
+                    0.0 if self.received_chunks == 0 else self.minimum_chunk_latency_ms
+                ),
+                "maximum_chunk_latency_ms": self.maximum_chunk_latency_ms,
+            }
 
     def parse_actions(self, payload: Any) -> list[TimedAction]:
         if not isinstance(payload, list):

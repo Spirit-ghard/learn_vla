@@ -1,5 +1,53 @@
 # 使用方式
 
+## 远程服务器推理（推荐）
+
+终端一登录服务器并启动 Policy Server：
+
+```bash
+ssh -p 30724 root@183.147.142.40
+
+cd /root/gpufree-data/lwh_policy_server
+/root/lerobot/.venv/bin/python serve_lerobot_policy.py \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --fps 30
+```
+
+看到 `LWH_ASYNC_POLICY_SERVER_READY` 后保持终端运行。
+
+终端二在本机建立 SSH 隧道：
+
+```bash
+ssh -N -p 30724 \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -L 18080:127.0.0.1:8080 \
+  root@183.147.142.40
+```
+
+终端三在本机启动 Isaac Sim：
+
+```bash
+conda activate isaac
+cd /home/a/lwh_code/lwh_robot_learning
+
+python3 scripts/run_policy_client.py \
+  --task Lwh-SO101-Table-v0 \
+  --server_address 127.0.0.1:18080 \
+  --policy_path /root/gpufree-data/lwh_lerobot_data/runs/act_video_b32_50k_20260823_184025/checkpoints/030000/pretrained_model \
+  --policy_device cuda \
+  --actions_per_chunk 60 \
+  --chunk_size_threshold 0.65 \
+  --camera_mode dual \
+  --render_interval 2
+```
+
+`--policy_path` 是服务器上的路径。客户端会先等待首个 action chunk，再开始执行策略。
+运行期间只控制 IsaacLab 仿真机器人，不访问真实 follower。
+
+## 本机推理
+
 终端一启动 LeRobot 异步策略服务端：
 
 ```bash
@@ -28,10 +76,10 @@ python3 scripts/run_policy_client.py \
   --chunk_size_threshold 0.5
 ```
 
-如果本机同时运行 Isaac Sim 和 ACT 时显存不足，将客户端命令中的推理设备改为：
+上面的本机命令默认使用 CPU 推理，避免 Isaac Sim 和 ACT 争用 6GB 显存。确认显存充足时可改为：
 
 ```bash
---policy_device cpu
+--policy_device cuda
 ```
 
 ## 运行流程
@@ -72,8 +120,8 @@ python3 scripts/run_policy_client.py \
 | `--policy_path` | `checkpoints/act_so101_table_030000` | 服务端能够访问的 LeRobot checkpoint 路径。远程运行时必须填写服务器上的路径。 |
 | `--policy_type` | `act` | LeRobot 策略类型，当前 checkpoint 使用 ACT。 |
 | `--policy_device` | `cuda` | PolicyServer 加载模型的设备。使用服务器 GPU 时保持 `cuda`；本机显存不足时改为 `cpu`。 |
-| `--actions_per_chunk` | `30` | 每次推理返回的动作数量。30 Hz 下，30 个动作约覆盖 1 秒。当前 ACT checkpoint 最大支持 100。 |
-| `--chunk_size_threshold` | `0.5` | action queue 剩余 50% 时请求下一段动作，避免队列完全耗尽后才开始推理。 |
+| `--actions_per_chunk` | `30` | 每次推理返回的动作数量。公网部署推荐显式设置为 60，当前 ACT checkpoint 最大支持 100。 |
+| `--chunk_size_threshold` | `0.5` | action queue 的预取阈值。公网部署推荐显式设置为 0.65。 |
 | `--aggregate_fn_name` | `weighted_average` | 融合新旧 action chunk 中相同 timestep 的动作。默认更偏向新动作。 |
 | `--policy_hz` | `30` | 本地 action queue 的消费频率，应与训练数据 FPS 保持一致。 |
 | `--camera_mode` | `dual` | `dual` 使用 front+wrist；`triple` 额外保留 overview 供观察，但 overview 不发送给模型。 |
@@ -88,15 +136,15 @@ python3 scripts/run_policy_client.py \
 
 ```text
 policy_hz=30
-actions_per_chunk=30
-chunk_size_threshold=0.5
+actions_per_chunk=60
+chunk_size_threshold=0.65
 aggregate_fn_name=weighted_average
 render_interval=2
 ```
 
-这套配置表示客户端每秒执行 30 个策略动作，每次推理生成约 1 秒动作，并在队列
-剩余约 0.5 秒时发送最新 observation。它不是每秒只发送一次固定图像；发送时机由
-action queue 剩余量决定，因此能在动作连续性和环境反馈之间保持平衡。
+这套远程配置表示客户端每秒执行 30 个策略动作，每次推理生成约 2 秒动作，并在队列
+剩余约 1.3 秒时发送最新 observation。观测上传和 action 接收都不阻塞 IsaacLab 主循环，
+同一时刻最多保留一条在途观测。
 
 ## 远程服务器
 
