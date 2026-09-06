@@ -20,7 +20,7 @@
 
 ```bash
 cd /home/a/lwh_code/lwh_robot_learning
-git checkout stage_4
+git checkout stage_5
 ```
 ## 参数修改:
 #### robot，相机等位置在so101_table_env_cfg.py的顶部
@@ -81,7 +81,7 @@ python3 scripts/convert_hdf5_to_lerobot.py --input datasets/hdf5/lwh_so101_table
 | `--task` | `Lwh-SO101-Table-v0` | 要启动的 Gym task id。 |
 | `--num_envs` | `1` | 仿真环境数量；遥操作、录制、回放建议保持 1。 |
 | `--teleop_device` | `keyboard` / 回放 `auto` | `keyboard` 使用键盘；`so101leader` 只读取真实 leader；回放可自动按 HDF5 action 维度选择。 |
-| `--camera_mode` | 遥操作/录制 `front`，回放 `dual` | `front` 只启用前视；`dual` 启用 front+wrist；`triple` 额外启用 overview。录制网页三窗口数据时用 `triple`。 |
+| `--camera_mode` | 遥操作/录制 `dual`，回放 `dual` | `front` 只启用前视；`dual` 启用 front+wrist；`triple` 额外启用 overview。录制网页三窗口数据时用 `triple`。 |
 | `--ground_mode` | `off` | `off` 移除额外 ground；`on` 保留完整 ground。 |
 | `--record` | `False` | 加在 `scripts/teleop.py` 上后进入 HDF5 录制流程。 |
 | `--output` | 脚本默认值 | HDF5 输出路径，录制使用。 |
