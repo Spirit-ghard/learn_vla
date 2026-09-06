@@ -570,3 +570,12 @@ Stage 6 远程推理：
 - IsaacLab Policy Client 发送 observation，接收 action，执行 env.step。
 - LeRobot Policy Server 加载 checkpoint，进行远程推理。
 - 定义 observation/action schema、图像编码、超时、action horizon、timestamp、reset 协议和断连安全行为。
+
+真实机器人落地路线：
+
+- 当前 SSH 远程推理只用于仿真验证，不作为真实机器人最终安全架构。
+- 真实部署优先采用边缘端闭环：相机、策略推理、动作后处理、watchdog 和安全控制均靠近机器人。
+- 云端或远程服务器可用于训练、模型管理和非实时推理；跨公网链路不能承担唯一的低级控制闭环。
+- FlashRT 作为 VLA 推理运行时加速候选，重点评估算子融合、CUDA Graph、低精度量化、显存占用和端到端延迟。
+- 使用 FlashRT 前先确认模型和硬件在其当前支持范围内；当前 ACT checkpoint 不默认视为可直接接入 FlashRT。
+- 每次加速必须保留原始 PyTorch/LeRobot 回退路径，并比较动作数值、P50/P95/P99 延迟、显存、功耗和连续运行稳定性。

@@ -1,10 +1,21 @@
 # HZ Robot Learning
 
-当前分支是 `stage_4`：HDF5 录制/回放、网页数据查看、SO101 leader/follower 标定工具。
+当前分支是 `stage_5`：HDF5 录制/回放、网页数据查看、SO101 leader/follower 标定工具、LeRobot 训练和本地 Isaac Sim + 服务器异步推理。
 
 项目只运行 IsaacLab 仿真，不控制真实 follower。`--teleop_device so101leader` 只读取真实 SO101 Leader 作为仿真输入。
 
 场景物体当前使用黄色胶囊棍子，并在桌面上加入低矮放置托盘。每次 reset 会在桌面 XY 方向对可抓取物体做约 `±3cm` 的轻微随机化，用于提升数据覆盖，但不会把目标随机到操作区域外或撞到托盘。
+
+## 项目演示
+
+服务器运行 LeRobot 策略、本地 Isaac Sim 运行异步推理客户端的演示：
+
+<video controls preload="metadata" width="100%">
+  <source src="https://raw.githubusercontent.com/Spirit-ghard/learn_vla/stage_5/%E5%BE%85%E9%98%85%E8%AF%BB/%E6%9C%8D%E5%8A%A1%E5%99%A8%2B%E6%9C%AC%E5%9C%B0%2B%E5%BC%82%E6%AD%A5%E6%8E%A8%E7%90%86.mp4" type="video/mp4">
+  当前页面不支持内嵌播放，请点击下面的 MP4 链接查看视频。
+</video>
+
+[打开 MP4 视频](./待阅读/服务器%2B本地%2B异步推理.mp4) · [下载原始 MKV 视频](./待阅读/服务器%2B本地%2B异步推理.mkv)
 
 ## 使用方式
 
