@@ -8,12 +8,9 @@
 
 ## 项目演示
 
-服务器运行 LeRobot 策略、本地 Isaac Sim 运行异步推理客户端的演示：
+服务器运行 LeRobot 策略、本地 Isaac Sim 运行异步推理客户端的演示。GitHub 页面使用动图预览，点击预览可打开完整视频：
 
-<video controls preload="metadata" width="100%">
-  <source src="https://raw.githubusercontent.com/Spirit-ghard/learn_vla/stage_5/%E5%BE%85%E9%98%85%E8%AF%BB/%E6%9C%8D%E5%8A%A1%E5%99%A8%2B%E6%9C%AC%E5%9C%B0%2B%E5%BC%82%E6%AD%A5%E6%8E%A8%E7%90%86.mp4" type="video/mp4">
-  当前页面不支持内嵌播放，请点击下面的 MP4 链接查看视频。
-</video>
+[![服务器 + 本地异步推理演示](./待阅读/服务器%2B本地%2B异步推理.gif)](./待阅读/服务器%2B本地%2B异步推理.mp4)
 
 [打开 MP4 视频](./待阅读/服务器%2B本地%2B异步推理.mp4) · [下载原始 MKV 视频](./待阅读/服务器%2B本地%2B异步推理.mkv)
 
