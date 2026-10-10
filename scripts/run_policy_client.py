@@ -19,6 +19,9 @@ from typing import Any
 
 from isaac_runtime import ensure_isaac_runtime
 
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 配置
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 project_root = Path(__file__).resolve().parents[1]
 default_policy_path = project_root / "checkpoints/act_so101_table_030000"
@@ -152,6 +155,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_steps", type=int, default=0, help="运行 N 个仿真步后停止；0 表示持续运行。")
     parser.add_argument("--log_interval", type=int, default=60, help="状态日志间隔，单位为仿真步。")
 
+
+
     from isaaclab.app import AppLauncher
 
     AppLauncher.add_app_launcher_args(parser)
@@ -177,7 +182,8 @@ def parse_args() -> argparse.Namespace:
     args.enable_cameras = True
     return args
 
-
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ensure_isaac_runtime()
 args_cli = parse_args()
 

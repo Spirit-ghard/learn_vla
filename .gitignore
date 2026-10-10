@@ -21,3 +21,8 @@ configs/remote_policy_server_config.py
 
 # 文档附件中的安装程序应从官网下载，避免把大型二进制发行包提交到仓库。
 *.exe
+
+# 个人学习资料和阅读笔记，不纳入项目版本控制。
+待阅读/
+已阅读/
+learn_knowledge/
