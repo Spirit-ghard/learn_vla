@@ -1,4 +1,4 @@
-"""Register the LWH SO101 table task."""
+"""Gym 注册点：把稳定 task id 绑定到环境和本任务配置类。"""
 
 import gymnasium as gym
 

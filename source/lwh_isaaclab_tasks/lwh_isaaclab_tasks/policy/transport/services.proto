@@ -25,9 +25,13 @@ service LearnerService {
 }
 
 service AsyncInference {
+  // 客户端流式上传分块后的 observation，服务端收到完整消息后返回空响应。
   rpc SendObservations(stream Observation) returns (Empty);
+  // 客户端请求服务端当前可用的 action chunk。
   rpc GetActions(Empty) returns (Actions);
+  // 首次连接时发送策略类型、checkpoint 路径和输入 feature 契约。
   rpc SendPolicyInstructions(PolicySetup) returns (Empty);
+  // 检查服务端是否已监听并可以接受请求。
   rpc Ready(Empty) returns (Empty);
 }
 

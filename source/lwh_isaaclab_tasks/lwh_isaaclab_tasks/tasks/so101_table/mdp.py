@@ -1,4 +1,4 @@
-"""MDP helpers for the LWH SO101 table task."""
+"""任务配置调用的 MDP 辅助函数：把场景对象状态转换成环境观测张量。"""
 
 from __future__ import annotations
 

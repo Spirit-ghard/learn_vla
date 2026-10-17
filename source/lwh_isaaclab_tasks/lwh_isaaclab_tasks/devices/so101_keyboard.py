@@ -1,4 +1,4 @@
-"""Carb keyboard teleoperation for the simulated SO101 follower."""
+"""键盘遥操作设备：Carb 按键形成末端增量，经环境预处理后驱动仿真 follower。"""
 
 from __future__ import annotations
 
@@ -81,6 +81,7 @@ class SO101Keyboard:
         if not self._started:
             return None
 
+        # 先整理当前按键增量，再交给任务配置决定 IK 和最终动作格式。
         joint_state = self._convert_delta_from_frame(self._delta_action)
         action = {"reset": False, "started": True, self.device_type: True, "joint_state": joint_state}
         return self.env.cfg.preprocess_device_action(action, self)
@@ -135,6 +136,7 @@ class SO101Keyboard:
         if np.allclose(delta_action[:3], 0.0) and np.allclose(delta_action[3:6], 0.0):
             return delta_action.copy()
 
+        # 按键增量在末端坐标系表达，仿真动作要使用机器人根坐标系。
         is_delta_rot = not np.allclose(delta_action[3:6], 0.0)
         torch_delta_action = torch.tensor(delta_action, device=self.env.device, dtype=torch.float32)
         delta_pos_f = torch_delta_action[:3].repeat(self.env.num_envs, 1)

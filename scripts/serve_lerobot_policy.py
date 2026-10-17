@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""为 IsaacLab 客户端运行 LeRobot 官方异步策略服务。"""
+"""LeRobot 侧 gRPC 服务入口：接收策略配置与 observation，返回 action chunk。"""
 
 from __future__ import annotations
 
@@ -128,6 +128,7 @@ class IsaacLabPolicyServerAdapter:
 
 
 def main() -> None:
+    # 服务端只负责网络和策略适配；模型加载与推理由 LeRobot PolicyServer 完成。
     from lerobot.async_inference.configs import PolicyServerConfig
     from lerobot.transport import services_pb2_grpc
 

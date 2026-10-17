@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在 IsaacLab SO101 任务中异步评估 LeRobot 策略。"""
+"""IsaacLab 推理客户端：采集 observation、异步请求动作并持续推进仿真。"""
 
 from __future__ import annotations
 
@@ -421,8 +421,9 @@ def to_uint8_image(image: torch.Tensor) -> np.ndarray:
 
 
 def raw_policy_observation(observations: dict[str, Any], task: str) -> dict[str, Any]:
-    """构造官方 RobotClient 发送给 PolicyServer 的原始硬件观测格式。"""
+    """把 Isaac 张量整理为服务端约定的关节 state、RGB 图像和任务文本。"""
     policy_obs = observations["policy"]
+    # 策略协议按固定关节顺序发送标量，避免直接传输 IsaacLab 的 batch tensor。
     state = policy_obs["joint_pos"][0].detach().cpu().numpy().astype(np.float32)
     raw = {f"{name}.pos": float(value) for name, value in zip(SO101_JOINT_NAMES, state, strict=True)}
     raw["front"] = to_uint8_image(policy_obs["front"])
@@ -459,6 +460,7 @@ def extract_observations(reset_or_step_result) -> dict[str, Any]:
 
 
 def main() -> None:
+    # 仿真主线程不等待模型推理；异步客户端在后台收发，主循环持续消费动作队列。
     env = None
     client: IsaacLabAsyncPolicyClient | None = None
     keyboard: PolicyKeyboard | None = None

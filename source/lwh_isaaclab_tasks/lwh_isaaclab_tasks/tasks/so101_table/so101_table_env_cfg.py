@@ -1,4 +1,4 @@
-"""Manager-based configuration for the LWH SO101 table task."""
+"""SO101 桌面任务总配置：组合场景、传感器、观测、动作、事件和终止条件。"""
 
 from __future__ import annotations
 
@@ -148,6 +148,8 @@ def placement_box_part_cfg(
 @configclass
 class LwhSO101TableSceneCfg(InteractiveSceneCfg):
     """SO101、桌面、可抓取棍子、放置框、地面、灯光和相机的场景配置。"""
+
+    # 机器人模型和执行器集中在 assets/so101.py，这里只决定它在本任务中的路径。
 
     robot: ArticulationCfg = SO101_FOLLOWER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -369,6 +371,8 @@ class LwhSO101EventCfg:
 @configclass
 class LwhSO101ObservationsCfg:
     """Policy 观测契约：关节状态、相机图像、末端状态和上一帧动作。"""
+
+    # overview 供本地人工观察；训练和策略服务只使用契约中声明的策略输入。
 
     @configclass
     class PolicyCfg(ObsGroup):

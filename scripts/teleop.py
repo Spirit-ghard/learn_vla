@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keyboard teleoperation entry point for registered LWH simulation tasks."""
+"""遥操作入口：配置设备和相机，读取 teleop 动作并交给 IsaacLab 环境执行。"""
 
 from __future__ import annotations
 
@@ -160,6 +160,7 @@ def append_record_option_if_missing(command: list[str], argv: list[str], option:
 
 def launch_record_hdf5_entry(args: argparse.Namespace) -> None:
     """让 `teleop.py --record` 成为正式入口，同时复用阶段三的 HDF5 录制流程。"""
+    # 保持 teleop 为用户入口；episode 管理和 HDF5 写盘由 recorder 实现。
     record_script = PROJECT_ROOT / "scripts" / "record_hdf5.py"
     if not record_script.is_file():
         raise FileNotFoundError(f"Cannot find HDF5 recorder entry: {record_script}")

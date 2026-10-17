@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record SO101 teleoperation episodes from IsaacLab simulation into HDF5."""
+"""录制实现：遥操作输入经过仿真后，与状态、图像和时间戳一起写入 HDF5。"""
 
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ def read_string_dataset(group: h5py.Group, key: str) -> list[str] | None:
 
 
 class HDF5TeleopRecorder:
-    """LeIsaac/IsaacLab 风格的在线 HDF5 episode 写入器。"""
+    """在线 HDF5 写入器；每条 episode 单独分组并保存结束结果。"""
 
     def __init__(
         self,
@@ -744,6 +744,7 @@ def main() -> None:
         (VALIDATION_OUTPUT_DIR / "record_report.json").unlink(missing_ok=True)
         (VALIDATION_OUTPUT_DIR / "record_failure.txt").unlink(missing_ok=True)
 
+    # 录制必须先确定设备和相机配置，保证写入的字段与实际 observation 一致。
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.use_teleop_device(args_cli.teleop_device)
     env_cfg.recorders = None

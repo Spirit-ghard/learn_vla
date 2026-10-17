@@ -1,4 +1,4 @@
-"""IsaacLab adapter for LeRobot's official asynchronous inference protocol."""
+"""IsaacLab 异步客户端：后台发送观测、接收 action chunk，主仿真循环继续运行。"""
 
 from __future__ import annotations
 
@@ -183,6 +183,7 @@ class IsaacLabAsyncPolicyClient:
 
     def start(self) -> None:
         """执行官方 Ready/SendPolicyInstructions 握手并启动 action 接收线程。"""
+        # 先确认服务端可用，再发送模型和输入规格，随后启动收发线程。
         self.stub.Ready(services_pb2.Empty(), timeout=self.timeout_s)
         request = services_pb2.PolicySetup(
             data=pickle.dumps(self.policy_setup, protocol=pickle.HIGHEST_PROTOCOL)
@@ -253,6 +254,7 @@ class IsaacLabAsyncPolicyClient:
         # 公网延迟可能长于剩余动作时域，预取请求必须绕过服务端的相似观测过滤。
         must_go = self.must_go.is_set()
 
+        # 队列只保留最新观测，避免网络拥塞时把过时画面排队传给策略。
         timed_observation = {
             "timestamp": time.time(),
             "timestep": max(latest_action, 0),
@@ -395,6 +397,7 @@ class IsaacLabAsyncPolicyClient:
 
     def aggregate_action_queues(self, incoming_actions: list[TimedAction]) -> None:
         """逐 timestep 聚合重叠 chunk，与 LeRobot RobotClient 保持一致。"""
+        # 对时间戳重叠的动作融合；新 chunk 覆盖它之外的旧未来动作。
         future_action_queue: Queue[TimedAction] = Queue()
         with self.action_queue_lock:
             current_actions = {

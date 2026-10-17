@@ -1,4 +1,4 @@
-"""SO101 follower articulation config for IsaacLab."""
+"""定义仿真 follower 的模型路径、初始状态和关节执行器参数。"""
 
 from __future__ import annotations
 

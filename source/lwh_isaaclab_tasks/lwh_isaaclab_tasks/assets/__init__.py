@@ -1,4 +1,4 @@
-"""Simulation asset configs used by LWH IsaacLab tasks.
+"""资产导出入口；延迟加载 Isaac 配置，避免读纯常量时启动重型仿真模块。
 
 常量可以在不启动 Isaac/Carb 的普通 Python 进程中导入；仿真资产配置按需加载。
 """

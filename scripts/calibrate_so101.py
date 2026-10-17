@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, import, or calibrate SO101 leader/follower arms with LeRobot-compatible calibration files."""
+"""SO101 标定入口：检查/导入 JSON，或委托 LeRobot 设备类执行标定。"""
 
 from __future__ import annotations
 

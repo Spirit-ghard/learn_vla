@@ -1,4 +1,4 @@
-"""SO101 joint constants shared by simulation configs and teleop devices."""
+"""SO101 跨模块数据约定：名称和顺序必须与 USD、数据集和策略 action 一致。"""
 
 SO101_JOINT_NAMES = [
     "shoulder_pan",

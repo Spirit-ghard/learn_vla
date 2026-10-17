@@ -1,4 +1,4 @@
-"""Banana prop asset for the LWH SO101 table task.
+"""配置桌面任务的可抓取资产，并在 spawn 时补齐 USD 缺少的物理属性。
 
 香蕉 USD 来自 YCB object 011，网格本身没有作者化 physics/collision API。
 本模块提供一个自定义 spawn 函数：spawn 后逐 mesh 补齐刚体、碰撞（凸包近似）

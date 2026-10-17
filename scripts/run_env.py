@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continuously run a registered LWH task until the simulator is closed."""
+"""最小仿真入口：初始化 Isaac、注册 Gym task、创建环境并循环推进仿真。"""
 
 from __future__ import annotations
 
@@ -61,11 +61,13 @@ def main() -> None:
     if args_cli.num_envs < 1:
         raise ValueError("--num_envs must be positive.")
 
+    # 任务 ID 先解析成 IsaacLab 配置，再选择键盘模式所需的动作空间。
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     # 这里只生成键盘模式对应的仿真动作空间，不创建键盘或真实机器人设备。
     env_cfg.use_teleop_device("keyboard")
     env_cfg.recorders = None
 
+    # gym.make 按注册名实例化环境；unwrapped 便于直接使用 IsaacLab 环境 API。
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     interrupted = False
 

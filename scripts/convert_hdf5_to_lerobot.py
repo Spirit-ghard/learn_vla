@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert LWH IsaacLab HDF5 recordings into LeRobotDataset v3."""
+"""格式适配器：检查 HDF5 schema，再将帧映射成 LeRobotDataset v3。"""
 
 from __future__ import annotations
 
@@ -307,6 +307,7 @@ def load_lerobot_dataset_class():
 
 
 def convert(args: argparse.Namespace, info: dict[str, Any]) -> dict[str, Any]:
+    # 转换阶段保持 episode/frame 顺序，把同一采样步的 state、action 和图像成组写出。
     LeRobotDataset = load_lerobot_dataset_class()
     if args.output_dir is not None and args.output_dir.exists():
         if not args.overwrite:

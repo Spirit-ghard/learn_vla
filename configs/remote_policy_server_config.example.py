@@ -1,13 +1,13 @@
 """
-远程策略服务器配置示例。
+远程策略服务器参数模板，由 run_policy_client.py 读取；复制后填写本机私有配置。
 
 服务器实例变化时必须检查：host、port、password。
 模型或服务器目录变化时才修改：policy_path、server_python、server_script。
 通常不需要修改：user、local_port、remote_port、policy_device、server_fps。
 
 启动顺序：
-1. 本机终端一运行 python3 scripts/start_remote_policy_server.py。
-2. 本机终端二运行 python3 scripts/run_policy_client.py。
+1. 服务端运行 scripts/serve_lerobot_policy.py。
+2. 本机运行 scripts/run_policy_client.py；远程参数通过 SSH 隧道生效。
 """
 
 # 是否默认启用远程推理

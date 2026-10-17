@@ -1,4 +1,4 @@
-"""Read-only SO101 Leader teleoperation device for IsaacLab simulation."""
+"""Leader 输入实现：串口读取六关节位置，归一化后只映射到 IsaacLab 仿真。"""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class LeaderMotorCalibration:
 
 
 class SO101LeaderBus:
-    """Minimal Feetech STS3215 bus wrapper used only for leader joint reading."""
+    """最小 Feetech 总线封装，处理串口、握手、同步读取和位置归一化。"""
 
     def __init__(
         self,
@@ -109,6 +109,7 @@ class SO101LeaderBus:
         }
 
     def connect(self) -> None:
+        # 连接阶段只执行一次；后续 advance 会复用已经打开的串口。
         if self._connected:
             return
         if not self._port_handler.openPort():
@@ -137,6 +138,7 @@ class SO101LeaderBus:
             self._connected = False
 
     def _ping_expected_motors(self) -> None:
+        # 标定文件把关节名映射到电机 ID，ping 用来提前发现断线或型号错误。
         missing: list[str] = []
         wrong_model: list[str] = []
         for joint_name in SO101_JOINT_NAMES:
@@ -155,6 +157,7 @@ class SO101LeaderBus:
             raise ConnectionError("SO101 leader motor handshake failed: " + "; ".join(parts))
 
     def _setup_sync_reader(self) -> None:
+        # 预登记六个 ID 后，每次读取都可以批量请求当前位置寄存器。
         self._sync_reader.clearParam()
         self._sync_reader.start_address = PRESENT_POSITION_ADDR
         self._sync_reader.data_length = PRESENT_POSITION_LEN
@@ -169,6 +172,7 @@ class SO101LeaderBus:
             self._packet_handler.write1ByteTxRx(self._port_handler, motor_id, LOCK_ADDR, 0)
 
     def read_raw_positions(self) -> dict[str, int]:
+        # 这里得到的是编码器原始计数，归一化和方向修正发生在下一层。
         if not self._connected:
             raise RuntimeError("SO101 leader bus is not connected.")
         comm = self._sync_reader.txRxPacket()
@@ -190,6 +194,7 @@ class SO101LeaderBus:
         return {name: self._normalize(name, raw_positions[name]) for name in SO101_JOINT_NAMES}
 
     def _normalize(self, joint_name: str, raw_position: int) -> float:
+        # 先截断到标定范围，避免异常读数破坏发送给仿真的输入契约。
         calibration = self.calibration[joint_name]
         if calibration.range_max == calibration.range_min:
             raise ValueError(f"Invalid calibration range for {joint_name}.")
@@ -203,7 +208,7 @@ class SO101LeaderBus:
 
 
 class SO101LeaderArm:
-    """SO101 Leader device that reads a real leader arm and drives only the simulated follower."""
+    """把总线读数接入 IsaacLab 设备接口；真实硬件只作为输入端。"""
 
     device_type = "so101leader"
 
